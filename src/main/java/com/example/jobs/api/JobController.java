@@ -1,8 +1,64 @@
 package com.example.jobs.api;
-import com.example.jobs.common.*; import jakarta.validation.Valid; import org.springframework.http.*; import org.springframework.web.bind.annotation.*; import java.util.*; import tools.jackson.databind.ObjectMapper;
-@RestController @RequestMapping("/api/jobs") public class JobController { private final JobService service; private final ObjectMapper objectMapper; public JobController(JobService service,ObjectMapper objectMapper){this.service=service;this.objectMapper=objectMapper;}
- @PostMapping public ResponseEntity<JobDtos.JobResponse> create(@Valid @RequestBody JobDtos.CreateJobRequest r){var existing=service.findByIdempotencyKey(r.idempotencyKey()).isPresent(); var job=service.create(r); return ResponseEntity.status(existing?HttpStatus.OK:HttpStatus.CREATED).body(toResponse(job,objectMapper));}
- @GetMapping("/{id}") public JobDtos.JobResponse get(@PathVariable long id){return toResponse(service.get(id),objectMapper);}
- @GetMapping public List<JobDtos.JobResponse> list(@RequestParam(required=false) JobStatus status,@RequestParam(defaultValue="20") int limit,@RequestParam(defaultValue="0") int offset){if(limit<1){throw new IllegalArgumentException("limit must be at least 1");} return service.list(status,Math.min(limit,100),Math.max(offset,0)).stream().map(job->toResponse(job,objectMapper)).toList();}
- static JobDtos.JobResponse toResponse(Job j,ObjectMapper objectMapper){try{return new JobDtos.JobResponse(j.id(),j.jobType(),objectMapper.readTree(j.payload()),j.status().name(),j.attempts(),j.maxAttempts(),j.runAt(),j.lastError(),j.idempotencyKey());}catch(Exception e){throw new IllegalStateException("Stored payload is invalid",e);}}
+
+import com.example.jobs.common.*;
+import jakarta.validation.Valid;
+import java.util.*;
+import org.springframework.http.*;
+import org.springframework.web.bind.annotation.*;
+import tools.jackson.databind.ObjectMapper;
+
+@RestController
+@RequestMapping("/api/jobs")
+public class JobController {
+  private final JobService service;
+  private final ObjectMapper objectMapper;
+
+  public JobController(JobService service, ObjectMapper objectMapper) {
+    this.service = service;
+    this.objectMapper = objectMapper;
+  }
+
+  @PostMapping
+  public ResponseEntity<JobDtos.JobResponse> create(
+      @Valid @RequestBody JobDtos.CreateJobRequest request) {
+    var existing = service.findByIdempotencyKey(request.idempotencyKey()).isPresent();
+    var job = service.create(request);
+    return ResponseEntity.status(existing ? HttpStatus.OK : HttpStatus.CREATED)
+        .body(toResponse(job, objectMapper));
+  }
+
+  @GetMapping("/{id}")
+  public JobDtos.JobResponse get(@PathVariable long id) {
+    return toResponse(service.get(id), objectMapper);
+  }
+
+  @GetMapping
+  public List<JobDtos.JobResponse> list(
+      @RequestParam(required = false) JobStatus status,
+      @RequestParam(defaultValue = "20") int limit,
+      @RequestParam(defaultValue = "0") int offset) {
+    if (limit < 1) {
+      throw new IllegalArgumentException("limit must be at least 1");
+    }
+    return service.list(status, Math.min(limit, 100), Math.max(offset, 0)).stream()
+        .map(job -> toResponse(job, objectMapper))
+        .toList();
+  }
+
+  static JobDtos.JobResponse toResponse(Job job, ObjectMapper objectMapper) {
+    try {
+      return new JobDtos.JobResponse(
+          job.id(),
+          job.jobType(),
+          objectMapper.readTree(job.payload()),
+          job.status().name(),
+          job.attempts(),
+          job.maxAttempts(),
+          job.runAt(),
+          job.lastError(),
+          job.idempotencyKey());
+    } catch (Exception exception) {
+      throw new IllegalStateException("Stored payload is invalid", exception);
+    }
+  }
 }

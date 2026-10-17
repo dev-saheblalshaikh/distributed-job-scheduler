@@ -1,7 +1,50 @@
 package com.example.jobs;
+
 import static org.junit.jupiter.api.Assertions.*;
-import com.example.jobs.api.*; import com.example.jobs.common.*; import com.example.jobs.worker.JobWorker; import org.junit.jupiter.api.*; import org.springframework.beans.factory.annotation.Autowired; import org.springframework.boot.test.context.SpringBootTest; import org.springframework.test.context.DynamicPropertyRegistry; import org.springframework.test.context.DynamicPropertySource; import org.testcontainers.containers.MySQLContainer; import org.testcontainers.junit.jupiter.Container; import org.testcontainers.junit.jupiter.Testcontainers; import tools.jackson.databind.ObjectMapper;
-@Testcontainers(disabledWithoutDocker = true) @SpringBootTest(properties = "worker.enabled=false")
-class JobIntegrationTest { @Container static MySQLContainer<?> mysql=new MySQLContainer<>("mysql:8.4"); @DynamicPropertySource static void db(DynamicPropertyRegistry r){r.add("spring.datasource.url",mysql::getJdbcUrl);r.add("spring.datasource.username",mysql::getUsername);r.add("spring.datasource.password",mysql::getPassword);}
- @Autowired JobService service; @Autowired JobRepository repo; @Autowired JobWorker worker; @Test void submitsAndCanReachSuccess(){var j=service.create(new JobDtos.CreateJobRequest("EMAIL",new ObjectMapper().createObjectNode().put("to","test@example.com"),null,null)); assertEquals(JobStatus.PENDING,j.status()); worker.pollOnce(); assertEquals(JobStatus.SUCCESS,repo.find(j.id()).orElseThrow().status());}
+
+import com.example.jobs.api.*;
+import com.example.jobs.common.*;
+import com.example.jobs.worker.JobWorker;
+import java.time.LocalDateTime;
+import java.time.ZoneOffset;
+import org.junit.jupiter.api.*;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.context.DynamicPropertyRegistry;
+import org.springframework.test.context.DynamicPropertySource;
+import org.testcontainers.containers.MySQLContainer;
+import org.testcontainers.junit.jupiter.Container;
+import org.testcontainers.junit.jupiter.Testcontainers;
+import tools.jackson.databind.ObjectMapper;
+
+@Testcontainers
+@SpringBootTest(properties = "worker.enabled=false")
+class JobIntegrationTest {
+  @Container static MySQLContainer<?> mysql = new MySQLContainer<>("mysql:8.4");
+
+  @DynamicPropertySource
+  static void db(DynamicPropertyRegistry r) {
+    r.add("spring.datasource.url", mysql::getJdbcUrl);
+    r.add("spring.datasource.username", mysql::getUsername);
+    r.add("spring.datasource.password", mysql::getPassword);
+  }
+
+  @Autowired JobService service;
+  @Autowired JobRepository repo;
+  @Autowired JobWorker worker;
+
+  @Test
+  void submitsAndCanReachSuccess() {
+    var runAt = LocalDateTime.now(ZoneOffset.UTC).minusSeconds(5);
+    var j =
+        service.create(
+            new JobDtos.CreateJobRequest(
+                "EMAIL",
+                new ObjectMapper().createObjectNode().put("to", "test@example.com"),
+                runAt,
+                null));
+    assertEquals(JobStatus.PENDING, j.status());
+    worker.pollOnce();
+    assertEquals(JobStatus.SUCCESS, repo.find(j.id()).orElseThrow().status());
+  }
 }
