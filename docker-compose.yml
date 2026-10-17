@@ -1,0 +1,18 @@
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-jobs}
+      MYSQL_USER: ${MYSQL_USER:-jobs}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-jobs}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
+    ports: ["3306:3306"]
+    healthcheck: { test: ["CMD", "mysqladmin", "ping", "-h", "localhost"], interval: 5s, timeout: 5s, retries: 20 }
+  app:
+    build: .
+    environment:
+      DB_URL: ${DB_URL:-jdbc:mysql://mysql:3306/jobs?createDatabaseIfNotExist=true&serverTimezone=UTC}
+      DB_USERNAME: ${MYSQL_USER:-jobs}
+      DB_PASSWORD: ${MYSQL_PASSWORD:-jobs}
+    ports: ["8080:8080"]
+    depends_on: { mysql: { condition: service_healthy } }

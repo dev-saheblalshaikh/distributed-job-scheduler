@@ -1,0 +1,3 @@
+package com.example.jobs.worker;
+import static org.junit.jupiter.api.Assertions.*; import org.junit.jupiter.api.Test; import java.util.*; import tools.jackson.databind.*;
+class JobHandlerRegistryTest { @Test void findsHandlerByType(){var h=new JobHandler(){public String type(){return "X";}public void execute(JsonNode p){}}; assertSame(h,new JobHandlerRegistry(List.of(h)).find("X").orElseThrow());} }

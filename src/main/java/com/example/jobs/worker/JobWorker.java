@@ -1,0 +1,5 @@
+package com.example.jobs.worker;
+import com.example.jobs.common.*; import org.springframework.scheduling.annotation.Scheduled; import org.springframework.stereotype.Component; import org.slf4j.*; import tools.jackson.databind.ObjectMapper;
+@Component public class JobWorker { private static final Logger log=LoggerFactory.getLogger(JobWorker.class); private final JobRepository repo; private final JobHandlerRegistry registry; private final ObjectMapper json; private final String id; public JobWorker(JobRepository r,JobHandlerRegistry g,ObjectMapper j,org.springframework.core.env.Environment e){repo=r;registry=g;json=j;id=e.getProperty("worker.id","worker-1");}
+ @Scheduled(fixedDelayString="${worker.poll-interval-ms:1000}") public void poll(){repo.pending().stream().findFirst().ifPresent(j->{if(!repo.claim(j.id(),id))return; try{var h=registry.find(j.jobType()).orElseThrow(()->new IllegalArgumentException("Unknown job type: "+j.jobType())); h.execute(json.readTree(j.payload())); repo.success(j.id());}catch(Exception e){log.warn("Job {} failed",j.id(),e);repo.fail(j.id(),e.getMessage());}});}
+}

@@ -1,0 +1,14 @@
+spring:
+  datasource:
+    url: ${DB_URL:jdbc:mysql://localhost:3306/jobs?createDatabaseIfNotExist=true&serverTimezone=UTC}
+    username: ${DB_USERNAME:jobs}
+    password: ${DB_PASSWORD:jobs}
+  flyway:
+    enabled: true
+  jackson:
+    default-property-inclusion: non_null
+management.endpoints.web.exposure.include: health,info
+worker:
+  id: ${WORKER_ID:worker-1}
+  poll-interval-ms: ${WORKER_POLL_INTERVAL_MS:1000}
+springdoc.swagger-ui.path: /swagger-ui.html

@@ -1,0 +1,12 @@
+package com.example.jobs.common;
+import java.sql.*; import java.time.*; import java.util.*; import org.springframework.jdbc.core.*; import org.springframework.jdbc.support.GeneratedKeyHolder; import org.springframework.stereotype.Repository;
+@Repository public class JobRepository { private final JdbcTemplate db; public JobRepository(JdbcTemplate db){this.db=db;}
+ private Job map(ResultSet r,int n)throws SQLException{return new Job(r.getLong("id"),r.getString("job_type"),r.getString("payload"),JobStatus.valueOf(r.getString("status")),r.getInt("attempts"),r.getInt("max_attempts"),r.getTimestamp("run_at").toLocalDateTime(),(String)r.getObject("locked_by"),r.getTimestamp("locked_at")==null?null:r.getTimestamp("locked_at").toLocalDateTime(),r.getString("last_error"),r.getString("idempotency_key"),r.getTimestamp("created_at").toLocalDateTime(),r.getTimestamp("updated_at").toLocalDateTime());}
+ public Optional<Job> find(long id){return db.query("select * from jobs where id=?",this::map,id).stream().findFirst();}
+ public Optional<Job> byKey(String key){return key==null?Optional.empty():db.query("select * from jobs where idempotency_key=?",this::map,key).stream().findFirst();}
+ public Job create(String type,String payload,LocalDateTime runAt,String key){var now=LocalDateTime.now(); var keys=new GeneratedKeyHolder(); db.update(c->{var p=c.prepareStatement("insert into jobs(job_type,payload,run_at,idempotency_key,created_at,updated_at) values(?,?,?,?,?,?)",Statement.RETURN_GENERATED_KEYS); p.setString(1,type);p.setString(2,payload);p.setObject(3,runAt);p.setString(4,key);p.setObject(5,now);p.setObject(6,now);return p;},keys); return find(keys.getKey().longValue()).orElseThrow();}
+ public List<Job> pending(){return db.query("select * from jobs where status='PENDING' and run_at<=now() order by run_at,id limit 1",this::map);}
+ public boolean claim(long id,String worker){return db.update("update jobs set status='RUNNING',locked_by=?,locked_at=now(),attempts=attempts+1,updated_at=now() where id=? and status='PENDING'",worker,id)==1;}
+ public void success(long id){db.update("update jobs set status='SUCCESS',updated_at=now() where id=?",id);} public void fail(long id,String error){db.update("update jobs set status='FAILED',last_error=?,updated_at=now() where id=?",error,id);}
+ public List<Job> list(JobStatus status,int limit,int offset){return db.query("select * from jobs where (? is null or status=?) order by id desc limit ? offset ?",this::map,status==null?null:status.name(),status==null?null:status.name(),limit,offset);}
+}
