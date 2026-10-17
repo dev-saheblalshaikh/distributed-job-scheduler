@@ -6,7 +6,7 @@ Architecture: `api` (HTTP DTOs/controllers) -> `common` (job model/repository) <
 
 ## Run
 
-Run `docker compose up --build`, or configure `DB_URL`, `DB_USERNAME`, and `DB_PASSWORD` and run `mvn spring-boot:run`. Java 25 and Maven are required. Health is at `/actuator/health`; OpenAPI UI is at `/swagger-ui.html`.
+Run `mvn test` to compile and verify the project. With Docker Desktop running, run `docker compose up --build` to start MySQL and the application. Java 25 and Maven are required. Health is at `/actuator/health`; OpenAPI UI is at `/swagger-ui.html`.
 
 ## Examples
 
