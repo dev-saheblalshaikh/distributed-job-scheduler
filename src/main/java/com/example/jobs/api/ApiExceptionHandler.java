@@ -4,6 +4,7 @@ import java.time.*;
 import java.util.*;
 import org.springframework.http.*;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
 
 @RestControllerAdvice
 public class ApiExceptionHandler {
@@ -12,6 +13,11 @@ public class ApiExceptionHandler {
   @ExceptionHandler(NoSuchElementException.class)
   ResponseEntity<ErrorResponse> notFound(Exception exception) {
     return error(404, "Not Found", exception.getMessage());
+  }
+
+  @ExceptionHandler(ResponseStatusException.class)
+  ResponseEntity<ErrorResponse> responseStatus(ResponseStatusException exception) {
+    return error(exception.getStatusCode().value(), exception.getStatusCode().toString(), exception.getReason());
   }
 
   @ExceptionHandler(Exception.class)

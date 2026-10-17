@@ -52,6 +52,11 @@ public class JobController {
         .toList();
   }
 
+  @PostMapping("/{id}/retry")
+  public JobDtos.JobResponse retry(@PathVariable long id) {
+    return toResponse(service.retry(id), objectMapper);
+  }
+
   static JobDtos.JobResponse toResponse(Job job, ObjectMapper objectMapper) {
     try {
       return new JobDtos.JobResponse(

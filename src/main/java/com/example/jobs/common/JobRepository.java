@@ -10,17 +10,23 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.support.GeneratedKeyHolder;
 import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.stereotype.Repository;
+import com.example.jobs.worker.RetryPolicy;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 @Repository
 // Centralizing SQL here keeps state transitions consistent across API and worker threads.
 public class JobRepository {
+  private static final Logger log = LoggerFactory.getLogger(JobRepository.class);
   private final JdbcTemplate jdbcTemplate;
   private final TransactionTemplate transactionTemplate;
+  private final RetryPolicy retryPolicy;
 
   // Keeping both collaborators injected makes the claim transaction use the same database access layer.
-  public JobRepository(JdbcTemplate jdbcTemplate, TransactionTemplate transactionTemplate) {
+  public JobRepository(JdbcTemplate jdbcTemplate, TransactionTemplate transactionTemplate, RetryPolicy retryPolicy) {
     this.jdbcTemplate = jdbcTemplate;
     this.transactionTemplate = transactionTemplate;
+    this.retryPolicy = retryPolicy;
   }
 
   // Mapping in one place prevents different callers from interpreting persisted job state differently.
@@ -58,18 +64,19 @@ public class JobRepository {
   }
 
   // UTC_TIMESTAMP() makes timestamps independent of the database server's local timezone.
-  public Job create(String type, String payload, LocalDateTime runAt, String key) {
+  public Job create(String type, String payload, LocalDateTime runAt, String key, int maxAttempts) {
     GeneratedKeyHolder keyHolder = new GeneratedKeyHolder();
     jdbcTemplate.update(
         connection -> {
           var statement =
               connection.prepareStatement(
-                  "insert into jobs(job_type,payload,run_at,idempotency_key,created_at,updated_at) values(?,?,?,?,UTC_TIMESTAMP(),UTC_TIMESTAMP())",
+                  "insert into jobs(job_type,payload,run_at,max_attempts,idempotency_key,created_at,updated_at) values(?,?,?,?,?,UTC_TIMESTAMP(),UTC_TIMESTAMP())",
                   Statement.RETURN_GENERATED_KEYS);
           statement.setString(1, type);
           statement.setString(2, payload);
           statement.setObject(3, runAt);
-          statement.setString(4, key);
+          statement.setInt(4, maxAttempts);
+          statement.setString(5, key);
           return statement;
         },
         keyHolder);
@@ -123,17 +130,30 @@ public class JobRepository {
   }
 
   // UTC_TIMESTAMP() keeps completion times comparable across containers in different host timezones.
-  public void success(long id) {
-    jdbcTemplate.update(
-        "update jobs set status='SUCCESS',updated_at=UTC_TIMESTAMP() where id=?", id);
+  public void success(long id, String workerId) {
+    int updated = jdbcTemplate.update(
+        "update jobs set status='SUCCESS',updated_at=UTC_TIMESTAMP() where id=? and status='RUNNING' and locked_by=?", id, workerId);
+    if (updated == 0) {
+      log.warn("Worker {} could not complete job {} because ownership changed", workerId, id);
+    }
   }
 
-  // UTC_TIMESTAMP() keeps failure times comparable across containers in different host timezones.
-  public void fail(long id, String error) {
-    jdbcTemplate.update(
-        "update jobs set status='FAILED',last_error=?,updated_at=UTC_TIMESTAMP() where id=?",
-        error,
-        id);
+  public void recordFailure(Job job, String error, boolean retryable, String workerId) {
+    boolean shouldRetry = retryable && job.attempts() < job.maxAttempts();
+    long delaySeconds = retryPolicy.delayForAttempt(job.attempts()).toSeconds();
+    String status = shouldRetry ? "PENDING" : "DEAD";
+    int updated = jdbcTemplate.update(
+        "update jobs set status=?,run_at=UTC_TIMESTAMP()+INTERVAL ? SECOND,last_error=?,locked_by=NULL,locked_at=NULL,updated_at=UTC_TIMESTAMP() where id=? and status='RUNNING' and locked_by=?",
+        status, delaySeconds, error, job.id(), workerId);
+    if (updated == 0) {
+      log.warn("Worker {} could not record failure for job {} because ownership changed", workerId, job.id());
+    }
+  }
+
+  public boolean retry(long id) {
+    return jdbcTemplate.update(
+        "update jobs set status='PENDING',attempts=0,run_at=UTC_TIMESTAMP(),locked_by=NULL,locked_at=NULL,updated_at=UTC_TIMESTAMP() where id=? and status='DEAD'",
+        id) == 1;
   }
 
   // Applying pagination in SQL avoids loading the complete job table into memory.

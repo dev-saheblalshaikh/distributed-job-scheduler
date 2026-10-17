@@ -15,7 +15,7 @@ class JobHandlerRegistryTest {
             return "X";
           }
 
-          public void execute(JsonNode p) {}
+          public void execute(JobContext context) {}
         };
     assertSame(h, new JobHandlerRegistry(List.of(h)).find("X").orElseThrow());
   }

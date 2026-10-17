@@ -63,12 +63,15 @@ public class JobWorker {
       var handler =
           registry
               .find(job.jobType())
-              .orElseThrow(() -> new IllegalArgumentException("Unknown job type: " + job.jobType()));
-      handler.execute(objectMapper.readTree(job.payload()));
-      jobRepository.success(job.id());
+              .orElseThrow(() -> new NonRetryableJobException("Unknown job type: " + job.jobType()));
+      handler.execute(new JobContext(job.id(), job.attempts(), objectMapper.readTree(job.payload())));
+      jobRepository.success(job.id(), workerId);
+    } catch (NonRetryableJobException exception) {
+      log.warn("Job {} is not retryable", job.id(), exception);
+      jobRepository.recordFailure(job, exception.getMessage(), false, workerId);
     } catch (Exception exception) {
       log.warn("Job {} failed", job.id(), exception);
-      jobRepository.fail(job.id(), exception.getMessage());
+      jobRepository.recordFailure(job, exception.getMessage(), true, workerId);
     }
   }
 }

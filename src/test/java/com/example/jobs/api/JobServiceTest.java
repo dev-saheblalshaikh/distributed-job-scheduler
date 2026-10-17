@@ -2,6 +2,7 @@ package com.example.jobs.api;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -39,7 +40,7 @@ class JobServiceTest {
         j,
         s.create(
             new JobDtos.CreateJobRequest(
-                "EMAIL", new ObjectMapper().createObjectNode(), null, "same")));
-    verify(r, never()).create(any(), any(), any(), any());
+                "EMAIL", new ObjectMapper().createObjectNode(), null, "same", 3)));
+    verify(r, never()).create(any(), any(), any(), any(), anyInt());
   }
 }

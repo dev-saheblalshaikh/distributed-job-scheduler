@@ -14,7 +14,8 @@ public class EmailJobHandler implements JobHandler {
     return "EMAIL";
   }
 
-  public void execute(JsonNode p) {
-    log.info("sending email to {}", p == null ? null : p.path("to").asText());
+  public void execute(JobContext context) {
+    JsonNode payload = context.payload();
+    log.info("sending email to {}", payload == null ? null : payload.path("to").asText());
   }
 }

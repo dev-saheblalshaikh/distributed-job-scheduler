@@ -16,5 +16,8 @@ worker:
   enabled: ${WORKER_ENABLED:true}
   id: ${WORKER_ID:worker-1}
   batch-size: ${WORKER_BATCH_SIZE:5}
+  retry:
+    base-delay-seconds: ${WORKER_RETRY_BASE_DELAY_SECONDS:2}
+    max-delay-seconds: ${WORKER_RETRY_MAX_DELAY_SECONDS:300}
   poll-interval-ms: ${WORKER_POLL_INTERVAL_MS:1000}
 springdoc.swagger-ui.path: /swagger-ui.html
