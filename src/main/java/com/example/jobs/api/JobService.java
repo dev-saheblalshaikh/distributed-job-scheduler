@@ -13,15 +13,18 @@ import tools.jackson.core.JacksonException;
 import tools.jackson.databind.ObjectMapper;
 
 @Service
+// Keeping business decisions here prevents controllers from knowing persistence details.
 public class JobService {
   private final JobRepository jobRepository;
   private final ObjectMapper objectMapper;
 
+  // Dependencies are injected so serialization and persistence remain replaceable and testable.
   public JobService(JobRepository jobRepository, ObjectMapper objectMapper) {
     this.jobRepository = jobRepository;
     this.objectMapper = objectMapper;
   }
 
+  // The early lookup handles normal duplicates, while the database catch handles concurrent requests.
   public Job create(JobDtos.CreateJobRequest request) {
     Job existingJob = jobRepository.byKey(request.idempotencyKey()).orElse(null);
     if (existingJob != null) {
@@ -44,16 +47,19 @@ public class JobService {
     }
   }
 
+  // A missing job becomes an explicit not-found error at the service boundary.
   public Job get(long id) {
     return jobRepository
         .find(id)
         .orElseThrow(() -> new NoSuchElementException("Job not found: " + id));
   }
 
+  // Exposing the lookup lets the controller choose the correct HTTP status for an existing key.
   public java.util.Optional<Job> findByIdempotencyKey(String key) {
     return jobRepository.byKey(key);
   }
 
+  // Delegating filtering and pagination preserves one SQL source of truth for job listings.
   public List<Job> list(JobStatus status, int limit, int offset) {
     return jobRepository.list(status, limit, offset);
   }

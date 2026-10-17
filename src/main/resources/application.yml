@@ -10,8 +10,11 @@ spring:
   jackson:
     default-property-inclusion: non_null
 management.endpoints.web.exposure.include: health,info
+api:
+  enabled: ${API_ENABLED:true}
 worker:
   enabled: ${WORKER_ENABLED:true}
   id: ${WORKER_ID:worker-1}
+  batch-size: ${WORKER_BATCH_SIZE:5}
   poll-interval-ms: ${WORKER_POLL_INTERVAL_MS:1000}
 springdoc.swagger-ui.path: /swagger-ui.html
