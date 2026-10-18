@@ -72,7 +72,11 @@ public class JobService {
     if (job.status() != JobStatus.DEAD) {
       throw new ResponseStatusException(HttpStatus.CONFLICT, "Job is not DEAD");
     }
-    jobRepository.retry(id);
+    boolean requeued = jobRepository.retry(id);
+    // Recheck the database result because another worker may have changed the state after the initial read.
+    if (!requeued) {
+      throw new ResponseStatusException(HttpStatus.CONFLICT, "Job is not DEAD");
+    }
     return get(id);
   }
 }

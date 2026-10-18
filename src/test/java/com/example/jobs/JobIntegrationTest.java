@@ -29,7 +29,11 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 import tools.jackson.databind.ObjectMapper;
 
 @Testcontainers
-@SpringBootTest(properties = {"worker.enabled=false", "worker.retry.base-delay-seconds=0"})
+@SpringBootTest(properties = {
+    "worker.enabled=false",
+    "worker.retry.base-delay-seconds=0",
+    "worker.lease-seconds=3"
+})
 @Import(JobIntegrationTest.BarrierHandlerConfiguration.class)
 class JobIntegrationTest {
   @Container static MySQLContainer<?> mysql = new MySQLContainer<>("mysql:8.4");
@@ -73,6 +77,8 @@ class JobIntegrationTest {
   @BeforeEach
   void clearJobs() {
     jdbcTemplate.update("delete from jobs");
+    // Reset the shared barrier so a previous test cannot leave it partially released.
+    barrier.reset();
   }
 
   @Test
@@ -206,6 +212,66 @@ class JobIntegrationTest {
     org.junit.jupiter.api.Assertions.assertThrows(
         org.springframework.web.server.ResponseStatusException.class,
         () -> service.retry(pendingJob.id()));
+  }
+
+  @Test
+  void expiredLeaseRequeuesJobWithAttemptsPreserved() {
+    Job job = createJob("EMAIL", objectMapper.createObjectNode(), 3);
+    jdbcTemplate.update(
+        "update jobs set status='RUNNING',attempts=1,locked_by='crashed-worker',lease_expires_at=UTC_TIMESTAMP()-INTERVAL 1 SECOND where id=?",
+        job.id());
+
+    repo.recoverExpiredLeases();
+
+    Job recoveredJob = repo.find(job.id()).orElseThrow();
+    assertEquals(JobStatus.PENDING, recoveredJob.status());
+    assertEquals(1, recoveredJob.attempts());
+    assertEquals("Lease expired (worker presumed dead)", recoveredJob.lastError());
+  }
+
+  @Test
+  void expiredLeaseAtMaximumAttemptsBecomesDead() {
+    Job job = createJob("EMAIL", objectMapper.createObjectNode(), 1);
+    jdbcTemplate.update(
+        "update jobs set status='RUNNING',attempts=1,locked_by='crashed-worker',lease_expires_at=UTC_TIMESTAMP()-INTERVAL 1 SECOND where id=?",
+        job.id());
+
+    repo.recoverExpiredLeases();
+
+    Job recoveredJob = repo.find(job.id()).orElseThrow();
+    assertEquals(JobStatus.DEAD, recoveredJob.status());
+    assertEquals(1, recoveredJob.attempts());
+    assertEquals("Lease expired (worker presumed dead)", recoveredJob.lastError());
+  }
+
+  @Test
+  void heartbeatKeepsLongRunningJobOwned() {
+    Job job = service.create(
+        new JobDtos.CreateJobRequest(
+            "CHAOS",
+            objectMapper.createObjectNode().put("sleepSeconds", 8),
+            LocalDateTime.now(ZoneOffset.UTC).minusSeconds(5),
+            null,
+            1));
+
+    worker.pollOnce();
+
+    Job completedJob = repo.find(job.id()).orElseThrow();
+    assertEquals(JobStatus.SUCCESS, completedJob.status());
+    assertEquals(1, completedJob.attempts());
+  }
+
+  @Test
+  void staleSuccessAfterRecoveryChangesNothing() {
+    Job job = createJob("EMAIL", objectMapper.createObjectNode(), 3);
+    jdbcTemplate.update(
+        "update jobs set status='RUNNING',attempts=1,locked_by='stale-worker',lease_expires_at=UTC_TIMESTAMP()-INTERVAL 1 SECOND where id=?",
+        job.id());
+    repo.recoverExpiredLeases();
+
+    repo.success(job.id(), "stale-worker");
+
+    assertEquals(JobStatus.PENDING, repo.find(job.id()).orElseThrow().status());
   }
 
   private Job createJob(String type, tools.jackson.databind.JsonNode payload, int maxAttempts) {

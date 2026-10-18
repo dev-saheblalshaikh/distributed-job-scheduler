@@ -21,12 +21,15 @@ public class JobRepository {
   private final JdbcTemplate jdbcTemplate;
   private final TransactionTemplate transactionTemplate;
   private final RetryPolicy retryPolicy;
+  private final int leaseSeconds;
 
   // Keeping both collaborators injected makes the claim transaction use the same database access layer.
-  public JobRepository(JdbcTemplate jdbcTemplate, TransactionTemplate transactionTemplate, RetryPolicy retryPolicy) {
+  public JobRepository(JdbcTemplate jdbcTemplate, TransactionTemplate transactionTemplate, RetryPolicy retryPolicy,
+      org.springframework.core.env.Environment environment) {
     this.jdbcTemplate = jdbcTemplate;
     this.transactionTemplate = transactionTemplate;
     this.retryPolicy = retryPolicy;
+    leaseSeconds = environment.getProperty("worker.lease-seconds", Integer.class, 30);
   }
 
   // Mapping in one place prevents different callers from interpreting persisted job state differently.
@@ -43,6 +46,9 @@ public class JobRepository {
         resultSet.getTimestamp("locked_at") == null
             ? null
             : resultSet.getTimestamp("locked_at").toLocalDateTime(),
+        resultSet.getTimestamp("lease_expires_at") == null
+            ? null
+            : resultSet.getTimestamp("lease_expires_at").toLocalDateTime(),
         resultSet.getString("last_error"),
         resultSet.getString("idempotency_key"),
         resultSet.getTimestamp("created_at").toLocalDateTime(),
@@ -104,10 +110,10 @@ public class JobRepository {
             parameters[index + 1] = jobIds.get(index);
           }
           jdbcTemplate.update(
-              "update jobs set status='RUNNING',locked_by=?,locked_at=UTC_TIMESTAMP(),attempts=attempts+1,updated_at=UTC_TIMESTAMP() where id in ("
+              "update jobs set status='RUNNING',lease_expires_at=UTC_TIMESTAMP()+INTERVAL ? SECOND,locked_by=?,locked_at=UTC_TIMESTAMP(),attempts=attempts+1,updated_at=UTC_TIMESTAMP() where id in ("
                   + placeholders
                   + ")",
-              parameters);
+              prependLeaseSeconds(parameters, leaseSeconds));
           return jobs.stream()
               .map(
                   job ->
@@ -121,6 +127,7 @@ public class JobRepository {
                           job.runAt(),
                           workerId,
                           LocalDateTime.now(java.time.ZoneOffset.UTC),
+                          LocalDateTime.now(java.time.ZoneOffset.UTC).plusSeconds(leaseSeconds),
                           job.lastError(),
                           job.idempotencyKey(),
                           job.createdAt(),
@@ -143,8 +150,8 @@ public class JobRepository {
     long delaySeconds = retryPolicy.delayForAttempt(job.attempts()).toSeconds();
     String status = shouldRetry ? "PENDING" : "DEAD";
     int updated = jdbcTemplate.update(
-        "update jobs set status=?,run_at=UTC_TIMESTAMP()+INTERVAL ? SECOND,last_error=?,locked_by=NULL,locked_at=NULL,updated_at=UTC_TIMESTAMP() where id=? and status='RUNNING' and locked_by=?",
-        status, delaySeconds, error, job.id(), workerId);
+        "update jobs set status=?,run_at=case when ?=1 then UTC_TIMESTAMP()+INTERVAL ? SECOND else run_at end,last_error=?,locked_by=NULL,locked_at=NULL,lease_expires_at=NULL,updated_at=UTC_TIMESTAMP() where id=? and status='RUNNING' and locked_by=?",
+        status, shouldRetry ? 1 : 0, delaySeconds, error, job.id(), workerId);
     if (updated == 0) {
       log.warn("Worker {} could not record failure for job {} because ownership changed", workerId, job.id());
     }
@@ -152,8 +159,39 @@ public class JobRepository {
 
   public boolean retry(long id) {
     return jdbcTemplate.update(
-        "update jobs set status='PENDING',attempts=0,run_at=UTC_TIMESTAMP(),locked_by=NULL,locked_at=NULL,updated_at=UTC_TIMESTAMP() where id=? and status='DEAD'",
+        "update jobs set status='PENDING',attempts=0,run_at=UTC_TIMESTAMP(),locked_by=NULL,locked_at=NULL,lease_expires_at=NULL,updated_at=UTC_TIMESTAMP() where id=? and status='DEAD'",
         id) == 1;
+  }
+
+  public int heartbeat(String workerId, List<Long> jobIds, int leaseSeconds) {
+    if (jobIds.isEmpty()) {
+      return 0;
+    }
+    String placeholders = String.join(",", java.util.Collections.nCopies(jobIds.size(), "?"));
+    Object[] parameters = new Object[jobIds.size() + 2];
+    parameters[0] = leaseSeconds;
+    parameters[1] = workerId;
+    for (int index = 0; index < jobIds.size(); index++) {
+      parameters[index + 2] = jobIds.get(index);
+    }
+    return jdbcTemplate.update(
+        "update jobs set lease_expires_at=UTC_TIMESTAMP()+INTERVAL ? SECOND,updated_at=UTC_TIMESTAMP() where status='RUNNING' and locked_by=? and id in ("
+            + placeholders
+            + ")",
+        parameters);
+  }
+
+  public int recoverExpiredLeases() {
+    return jdbcTemplate.update(
+        "update jobs set status=case when attempts<max_attempts then 'PENDING' else 'DEAD' end,run_at=case when attempts<max_attempts then UTC_TIMESTAMP() else run_at end,last_error='Lease expired (worker presumed dead)',locked_by=NULL,locked_at=NULL,lease_expires_at=NULL,updated_at=UTC_TIMESTAMP() where status='RUNNING' and lease_expires_at<UTC_TIMESTAMP()");
+  }
+
+
+  private Object[] prependLeaseSeconds(Object[] parameters, int leaseSeconds) {
+    Object[] updatedParameters = new Object[parameters.length + 1];
+    updatedParameters[0] = leaseSeconds;
+    System.arraycopy(parameters, 0, updatedParameters, 1, parameters.length);
+    return updatedParameters;
   }
 
   // Applying pagination in SQL avoids loading the complete job table into memory.

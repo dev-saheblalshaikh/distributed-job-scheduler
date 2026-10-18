@@ -10,6 +10,7 @@ public record Job(
     LocalDateTime runAt,
     String lockedBy,
     LocalDateTime lockedAt,
+    LocalDateTime leaseExpiresAt,
     String lastError,
     String idempotencyKey,
     LocalDateTime createdAt,
