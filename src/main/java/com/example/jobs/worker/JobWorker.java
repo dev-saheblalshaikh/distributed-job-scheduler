@@ -47,6 +47,10 @@ public class JobWorker {
   // Continuing until an empty claim drains available work without adding queue latency between batches.
   public void pollOnce() {
     while (true) {
+      // An interrupt lets shutdown stop before claiming more work, avoiding new orphaned jobs.
+      if (Thread.currentThread().isInterrupted()) {
+        return;
+      }
       List<Job> jobs = jobRepository.claimBatch(workerId, batchSize);
       if (jobs.isEmpty()) {
         return;
@@ -58,14 +62,16 @@ public class JobWorker {
           inFlightJobIds.add(job.id());
           tasks.add(executor.submit(() -> execute(job)));
         }
-        tasks.forEach(
-            task -> {
-              try {
-                task.get();
-              } catch (Exception exception) {
-                log.warn("Worker task failed", exception);
-              }
-            });
+        for (Future<?> task : tasks) {
+          try {
+            task.get();
+          } catch (InterruptedException exception) {
+            Thread.currentThread().interrupt();
+            return;
+          } catch (Exception exception) {
+            log.warn("Worker task failed", exception);
+          }
+        }
       }
     }
   }
@@ -90,18 +96,11 @@ public class JobWorker {
     List<Long> jobIds = List.copyOf(inFlightJobIds);
     int renewedRows = jobRepository.heartbeat(workerId, jobIds, leaseSeconds);
     if (renewedRows < jobIds.size()) {
-      List<Long> lostJobIds = new ArrayList<>(jobIds);
-      lostJobIds.removeAll(findOwnedJobIds());
+      List<Long> currentJobIds = List.copyOf(inFlightJobIds);
+      List<Long> lostJobIds = new ArrayList<>(currentJobIds);
+      lostJobIds.removeAll(jobRepository.runningJobIds(workerId, currentJobIds));
       log.warn("Worker {} lost leases for jobs {}", workerId, lostJobIds);
     }
-  }
-
-  private List<Long> findOwnedJobIds() {
-    return inFlightJobIds.stream()
-        .filter(jobId -> jobRepository.find(jobId)
-            .map(job -> workerId.equals(job.lockedBy()) && job.status() == com.example.jobs.common.JobStatus.RUNNING)
-            .orElse(false))
-        .toList();
   }
 
   @PreDestroy

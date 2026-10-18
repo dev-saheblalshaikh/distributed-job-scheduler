@@ -181,6 +181,22 @@ public class JobRepository {
         parameters);
   }
 
+  public List<Long> runningJobIds(String workerId, List<Long> jobIds) {
+    if (jobIds.isEmpty()) {
+      return List.of();
+    }
+    String placeholders = String.join(",", java.util.Collections.nCopies(jobIds.size(), "?"));
+    Object[] parameters = new Object[jobIds.size() + 1];
+    parameters[0] = workerId;
+    for (int index = 0; index < jobIds.size(); index++) {
+      parameters[index + 1] = jobIds.get(index);
+    }
+    return jdbcTemplate.queryForList(
+        "select id from jobs where status='RUNNING' and locked_by=? and id in (" + placeholders + ")",
+        Long.class,
+        parameters);
+  }
+
   public int recoverExpiredLeases() {
     return jdbcTemplate.update(
         "update jobs set status=case when attempts<max_attempts then 'PENDING' else 'DEAD' end,run_at=case when attempts<max_attempts then UTC_TIMESTAMP() else run_at end,last_error='Lease expired (worker presumed dead)',locked_by=NULL,locked_at=NULL,lease_expires_at=NULL,updated_at=UTC_TIMESTAMP() where status='RUNNING' and lease_expires_at<UTC_TIMESTAMP()");

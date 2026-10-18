@@ -313,12 +313,33 @@ class JobIntegrationTest {
       assertEquals(JobStatus.PENDING, requeuedJob.status());
       assertEquals(1, requeuedJob.attempts());
       workerTask.cancel(true);
+      try {
+        workerTask.get(5, TimeUnit.SECONDS);
+      } catch (java.util.concurrent.CancellationException exception) {
+        // Cancellation confirms the interrupted worker has stopped waiting for its batch.
+      }
     } finally {
       recoveryRunning.set(false);
       recoveryThread.interrupt();
       recoveryThread.join();
       executor.shutdownNow();
     }
+  }
+
+  @Test
+  void interruptedPollOnceDoesNotClaimNewJobs() throws Exception {
+    Job job = createJob("EMAIL", objectMapper.createObjectNode(), 1);
+    Thread interruptedWorker = new Thread(() -> {
+      Thread.currentThread().interrupt();
+      worker.pollOnce();
+    });
+
+    interruptedWorker.start();
+    interruptedWorker.join(5000);
+
+    assertFalse(interruptedWorker.isAlive());
+    assertEquals(JobStatus.PENDING, repo.find(job.id()).orElseThrow().status());
+    assertEquals(0, repo.find(job.id()).orElseThrow().attempts());
   }
 
   @Test
