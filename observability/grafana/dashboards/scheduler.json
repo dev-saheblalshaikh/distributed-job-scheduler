@@ -1,0 +1,12 @@
+{
+  "title": "Distributed Job Scheduler",
+  "schemaVersion": 39,
+  "panels": [
+    {"type":"timeseries","title":"Queue depth by status","targets":[{"expr":"jobs_queue_depth"}]},
+    {"type":"timeseries","title":"Jobs completed per second","targets":[{"expr":"sum by (result) (rate(jobs_completed_total[5m]))"}]},
+    {"type":"timeseries","title":"P95 execution time","targets":[{"expr":"histogram_quantile(0.95, sum by (le, job_type, result) (rate(job_execution_seconds_bucket[5m])))"}]},
+    {"type":"stat","title":"Dead jobs","targets":[{"expr":"jobs_queue_depth{status=\"DEAD\"}"}]},
+    {"type":"stat","title":"Lease recoveries","targets":[{"expr":"jobs_lease_recovered_total"}]},
+    {"type":"timeseries","title":"Oldest pending job age","targets":[{"expr":"jobs_oldest_pending_age_seconds"}]}
+  ]
+}

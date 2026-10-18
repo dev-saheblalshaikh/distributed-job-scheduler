@@ -9,7 +9,7 @@ spring:
     enabled: true
   jackson:
     default-property-inclusion: non_null
-management.endpoints.web.exposure.include: health,info
+management.endpoints.web.exposure.include: health,info,prometheus
 api:
   enabled: ${API_ENABLED:true}
 worker:

@@ -20,6 +20,11 @@ import org.springframework.context.annotation.Import;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.boot.test.web.server.LocalServerPort;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
@@ -27,9 +32,10 @@ import org.testcontainers.containers.MySQLContainer;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import tools.jackson.databind.ObjectMapper;
+import io.micrometer.core.instrument.MeterRegistry;
 
 @Testcontainers
-@SpringBootTest(properties = {
+@SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT, properties = {
     "worker.enabled=false",
     "worker.retry.base-delay-seconds=0",
     "worker.lease-seconds=3"
@@ -51,6 +57,8 @@ class JobIntegrationTest {
   @Autowired JobHandlerRegistry registry;
   @Autowired ObjectMapper objectMapper;
   @Autowired JdbcTemplate jdbcTemplate;
+  @Autowired MeterRegistry meterRegistry;
+  @LocalServerPort int serverPort;
 
   private static final CyclicBarrier barrier = new CyclicBarrier(3);
 
@@ -355,6 +363,17 @@ class JobIntegrationTest {
     assertEquals(JobStatus.PENDING, repo.find(job.id()).orElseThrow().status());
   }
 
+  @Test
+  void prometheusEndpointContainsQueueDepthMetric() throws Exception {
+    HttpRequest request = HttpRequest.newBuilder()
+        .uri(URI.create("http://localhost:" + serverPort + "/actuator/prometheus"))
+        .GET()
+        .build();
+    HttpResponse<String> response = HttpClient.newHttpClient().send(request, HttpResponse.BodyHandlers.ofString());
+    assertEquals(200, response.statusCode());
+    assertTrue(response.body().contains("jobs_queue_depth"));
+  }
+
   private Job createJob(String type, tools.jackson.databind.JsonNode payload, int maxAttempts) {
     return service.create(
         new JobDtos.CreateJobRequest(
@@ -376,7 +395,7 @@ class JobIntegrationTest {
             .withProperty("worker.batch-size", "1")
             .withProperty("worker.lease-seconds", "3")
             .withProperty("worker.heartbeat-enabled", Boolean.toString(heartbeatEnabled));
-    return new JobWorker(repo, registry, objectMapper, environment);
+    return new JobWorker(repo, registry, objectMapper, environment, meterRegistry);
   }
 
 }

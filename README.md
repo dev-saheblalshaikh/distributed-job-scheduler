@@ -27,3 +27,17 @@ The optional `maxAttempts` request field accepts values from 1 through 10. A dea
 ## Crash recovery
 
 Each claimed job receives a UTC lease. While a worker executes a job, a daemon heartbeat renews that lease so long-running work is not recovered prematurely. If a worker crashes and the lease expires, the scheduler requeues the job with its attempts preserved, or moves it to `DEAD` when the maximum attempts has been reached. Late results from the old worker are ignored by the ownership guards.
+
+## Observability
+
+With Docker Compose, Prometheus is available at `http://localhost:9090`, Grafana at `http://localhost:3000`, and application metrics at `http://localhost:8080/actuator/prometheus`. Grafana is provisioned with a Prometheus datasource and scheduler dashboard.
+
+Example PromQL queries:
+
+```promql
+jobs_queue_depth{status="PENDING"}
+sum by (result) (rate(jobs_completed_total[5m]))
+histogram_quantile(0.95, sum by (le) (rate(job_execution_seconds_bucket[5m])))
+```
+
+Scale workers with `docker compose up --build --scale worker=3 -d`. Worker containers do not publish host ports; Prometheus discovers their internal port through Docker DNS.

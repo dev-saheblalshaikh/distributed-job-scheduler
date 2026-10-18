@@ -14,6 +14,9 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import jakarta.annotation.PreDestroy;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 
 @Component
 // Keeping polling separate from scheduling makes the worker easy to run deterministically in tests.
@@ -26,6 +29,7 @@ public class JobWorker {
   private final int batchSize;
   private final int leaseSeconds;
   private final boolean heartbeatEnabled;
+  private final MeterRegistry meterRegistry;
   private final Set<Long> inFlightJobIds = ConcurrentHashMap.newKeySet();
   private ScheduledExecutorService heartbeatExecutor;
 
@@ -34,7 +38,8 @@ public class JobWorker {
       JobRepository jobRepository,
       JobHandlerRegistry jobHandlerRegistry,
       ObjectMapper objectMapper,
-      Environment environment) {
+      Environment environment,
+      MeterRegistry meterRegistry) {
     this.jobRepository = jobRepository;
     registry = jobHandlerRegistry;
     this.objectMapper = objectMapper;
@@ -42,6 +47,7 @@ public class JobWorker {
     batchSize = environment.getProperty("worker.batch-size", Integer.class, 5);
     leaseSeconds = environment.getProperty("worker.lease-seconds", Integer.class, 30);
     heartbeatEnabled = environment.getProperty("worker.heartbeat-enabled", Boolean.class, true);
+    this.meterRegistry = meterRegistry;
   }
 
   // Continuing until an empty claim drains available work without adding queue latency between batches.
@@ -54,6 +60,9 @@ public class JobWorker {
       List<Job> jobs = jobRepository.claimBatch(workerId, batchSize);
       if (jobs.isEmpty()) {
         return;
+      }
+      for (Job job : jobs) {
+        counter("jobs_claimed_total", "job_type", job.jobType()).increment();
       }
       startHeartbeat();
       try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
@@ -118,6 +127,7 @@ public class JobWorker {
 
   // One bad job is isolated so it cannot stop the worker loop from processing other jobs.
   private void execute(Job job) {
+    Timer.Sample timerSample = Timer.start(meterRegistry);
     try {
       var handler =
           registry
@@ -125,14 +135,31 @@ public class JobWorker {
               .orElseThrow(() -> new NonRetryableJobException("Unknown job type: " + job.jobType()));
       handler.execute(new JobContext(job.id(), job.attempts(), objectMapper.readTree(job.payload())));
       jobRepository.success(job.id(), workerId);
+      recordCompletion(job, "success", timerSample);
     } catch (NonRetryableJobException exception) {
       log.warn("Job {} is not retryable: {}", job.id(), exception.getMessage());
       jobRepository.recordFailure(job, exception.getMessage(), false, workerId);
+      recordCompletion(job, "dead", timerSample);
     } catch (Exception exception) {
       log.warn("Job {} failed", job.id(), exception);
       jobRepository.recordFailure(job, exception.getMessage(), true, workerId);
+      recordCompletion(job, job.attempts() < job.maxAttempts() ? "retry" : "dead", timerSample);
     } finally {
       inFlightJobIds.remove(job.id());
     }
+  }
+
+  private void recordCompletion(Job job, String result, Timer.Sample timerSample) {
+    counter("jobs_completed_total", "job_type", job.jobType(), "result", result).increment();
+    timerSample.stop(Timer.builder("job_execution_seconds")
+        .tag("job_type", job.jobType())
+        .tag("result", result)
+        .description("Job handler execution time")
+        .publishPercentiles()
+        .register(meterRegistry));
+  }
+
+  private Counter counter(String name, String... tags) {
+    return Counter.builder(name).tags(tags).register(meterRegistry);
   }
 }
