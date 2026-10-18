@@ -13,6 +13,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
+import jakarta.annotation.PreDestroy;
 
 @Component
 // Keeping polling separate from scheduling makes the worker easy to run deterministically in tests.
@@ -24,6 +25,7 @@ public class JobWorker {
   private final String workerId;
   private final int batchSize;
   private final int leaseSeconds;
+  private final boolean heartbeatEnabled;
   private final Set<Long> inFlightJobIds = ConcurrentHashMap.newKeySet();
   private ScheduledExecutorService heartbeatExecutor;
 
@@ -39,49 +41,72 @@ public class JobWorker {
     workerId = environment.getProperty("worker.id", "worker-1");
     batchSize = environment.getProperty("worker.batch-size", Integer.class, 5);
     leaseSeconds = environment.getProperty("worker.lease-seconds", Integer.class, 30);
+    heartbeatEnabled = environment.getProperty("worker.heartbeat-enabled", Boolean.class, true);
   }
 
   // Continuing until an empty claim drains available work without adding queue latency between batches.
   public void pollOnce() {
-    startHeartbeat();
-    try {
-      while (true) {
-        List<Job> jobs = jobRepository.claimBatch(workerId, batchSize);
-        if (jobs.isEmpty()) {
-          return;
-        }
-        try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
-          List<Future<?>> tasks = new ArrayList<>();
-          for (Job job : jobs) {
-            inFlightJobIds.add(job.id());
-            tasks.add(executor.submit(() -> execute(job)));
-          }
-          tasks.forEach(
-              task -> {
-                try {
-                  task.get();
-                } catch (Exception exception) {
-                  log.warn("Worker task failed", exception);
-                }
-              });
-        }
+    while (true) {
+      List<Job> jobs = jobRepository.claimBatch(workerId, batchSize);
+      if (jobs.isEmpty()) {
+        return;
       }
-    } finally {
-      stopHeartbeat();
+      startHeartbeat();
+      try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
+        List<Future<?>> tasks = new ArrayList<>();
+        for (Job job : jobs) {
+          inFlightJobIds.add(job.id());
+          tasks.add(executor.submit(() -> execute(job)));
+        }
+        tasks.forEach(
+            task -> {
+              try {
+                task.get();
+              } catch (Exception exception) {
+                log.warn("Worker task failed", exception);
+              }
+            });
+      }
     }
   }
 
   private void startHeartbeat() {
+    if (!heartbeatEnabled || heartbeatExecutor != null) {
+      return;
+    }
     heartbeatExecutor = Executors.newSingleThreadScheduledExecutor(runnable -> {
       Thread thread = new Thread(runnable, "job-heartbeat-" + workerId);
       thread.setDaemon(true);
       return thread;
     });
     heartbeatExecutor.scheduleAtFixedRate(
-        () -> jobRepository.heartbeat(workerId, List.copyOf(inFlightJobIds), leaseSeconds),
+        () -> renewLeases(),
         Math.max(1, leaseSeconds / 3),
         Math.max(1, leaseSeconds / 3),
         TimeUnit.SECONDS);
+  }
+
+  private void renewLeases() {
+    List<Long> jobIds = List.copyOf(inFlightJobIds);
+    int renewedRows = jobRepository.heartbeat(workerId, jobIds, leaseSeconds);
+    if (renewedRows < jobIds.size()) {
+      List<Long> lostJobIds = new ArrayList<>(jobIds);
+      lostJobIds.removeAll(findOwnedJobIds());
+      log.warn("Worker {} lost leases for jobs {}", workerId, lostJobIds);
+    }
+  }
+
+  private List<Long> findOwnedJobIds() {
+    return inFlightJobIds.stream()
+        .filter(jobId -> jobRepository.find(jobId)
+            .map(job -> workerId.equals(job.lockedBy()) && job.status() == com.example.jobs.common.JobStatus.RUNNING)
+            .orElse(false))
+        .toList();
+  }
+
+  @PreDestroy
+  public void shutdown() {
+    stopHeartbeat();
   }
 
   private void stopHeartbeat() {
@@ -92,6 +117,7 @@ public class JobWorker {
     inFlightJobIds.clear();
   }
 
+  // One bad job is isolated so it cannot stop the worker loop from processing other jobs.
   private void execute(Job job) {
     try {
       var handler =

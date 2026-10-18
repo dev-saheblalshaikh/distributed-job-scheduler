@@ -21,4 +21,5 @@ worker:
     base-delay-seconds: ${WORKER_RETRY_BASE_DELAY_SECONDS:2}
     max-delay-seconds: ${WORKER_RETRY_MAX_DELAY_SECONDS:300}
   poll-interval-ms: ${WORKER_POLL_INTERVAL_MS:1000}
+  recovery-interval-ms: ${WORKER_RECOVERY_INTERVAL_MS:10000}
 springdoc.swagger-ui.path: /swagger-ui.html

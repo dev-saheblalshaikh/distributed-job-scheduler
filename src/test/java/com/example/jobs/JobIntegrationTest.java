@@ -245,7 +245,7 @@ class JobIntegrationTest {
   }
 
   @Test
-  void heartbeatKeepsLongRunningJobOwned() {
+  void heartbeatKeepsLongRunningJobOwned() throws Exception {
     Job job = service.create(
         new JobDtos.CreateJobRequest(
             "CHAOS",
@@ -254,11 +254,71 @@ class JobIntegrationTest {
             null,
             1));
 
-    worker.pollOnce();
+    java.util.concurrent.atomic.AtomicBoolean recoveryRunning =
+        new java.util.concurrent.atomic.AtomicBoolean(true);
+    Thread recoveryThread = new Thread(() -> {
+      while (recoveryRunning.get()) {
+        repo.recoverExpiredLeases();
+        try {
+          Thread.sleep(500);
+        } catch (InterruptedException exception) {
+          Thread.currentThread().interrupt();
+          return;
+        }
+      }
+    });
+    recoveryThread.start();
+    try {
+      worker.pollOnce();
+    } finally {
+      recoveryRunning.set(false);
+      recoveryThread.interrupt();
+      recoveryThread.join();
+    }
 
     Job completedJob = repo.find(job.id()).orElseThrow();
     assertEquals(JobStatus.SUCCESS, completedJob.status());
     assertEquals(1, completedJob.attempts());
+  }
+
+  @Test
+  void longRunningJobIsRequeuedWithoutHeartbeat() throws Exception {
+    Job job = service.create(
+        new JobDtos.CreateJobRequest(
+            "CHAOS",
+            objectMapper.createObjectNode().put("sleepSeconds", 8),
+            LocalDateTime.now(ZoneOffset.UTC).minusSeconds(5),
+            null,
+            3));
+    JobWorker workerWithoutHeartbeat = worker("no-heartbeat", false);
+    java.util.concurrent.ExecutorService executor = Executors.newSingleThreadExecutor();
+    java.util.concurrent.atomic.AtomicBoolean recoveryRunning =
+        new java.util.concurrent.atomic.AtomicBoolean(true);
+    Thread recoveryThread = new Thread(() -> {
+      while (recoveryRunning.get()) {
+        repo.recoverExpiredLeases();
+        try {
+          Thread.sleep(500);
+        } catch (InterruptedException exception) {
+          Thread.currentThread().interrupt();
+          return;
+        }
+      }
+    });
+    recoveryThread.start();
+    try {
+      java.util.concurrent.Future<?> workerTask = executor.submit(workerWithoutHeartbeat::pollOnce);
+      Thread.sleep(4500);
+      Job requeuedJob = repo.find(job.id()).orElseThrow();
+      assertEquals(JobStatus.PENDING, requeuedJob.status());
+      assertEquals(1, requeuedJob.attempts());
+      workerTask.cancel(true);
+    } finally {
+      recoveryRunning.set(false);
+      recoveryThread.interrupt();
+      recoveryThread.join();
+      executor.shutdownNow();
+    }
   }
 
   @Test
@@ -285,10 +345,16 @@ class JobIntegrationTest {
   }
 
   private JobWorker worker(String workerId) {
+    return worker(workerId, true);
+  }
+
+  private JobWorker worker(String workerId, boolean heartbeatEnabled) {
     var environment =
         new org.springframework.mock.env.MockEnvironment()
             .withProperty("worker.id", workerId)
-            .withProperty("worker.batch-size", "1");
+            .withProperty("worker.batch-size", "1")
+            .withProperty("worker.lease-seconds", "3")
+            .withProperty("worker.heartbeat-enabled", Boolean.toString(heartbeatEnabled));
     return new JobWorker(repo, registry, objectMapper, environment);
   }
 

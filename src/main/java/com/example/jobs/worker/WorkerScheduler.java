@@ -23,7 +23,7 @@ public class WorkerScheduler {
     jobWorker.pollOnce();
   }
 
-  @Scheduled(fixedDelay = 10000)
+  @Scheduled(fixedDelayString = "${worker.recovery-interval-ms:10000}")
   public void recoverLeases() {
     jobRepository.recoverExpiredLeases();
   }
