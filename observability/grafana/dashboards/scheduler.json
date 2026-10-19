@@ -4,12 +4,13 @@
   "refresh": "5s",
   "time": {"from": "now-15m", "to": "now"},
   "panels": [
-    {"type":"timeseries","title":"Queue depth by status","gridPos":{"h":8,"w":12,"x":0,"y":0},"targets":[{"expr":"jobs_queue_depth"}]},
-    {"type":"timeseries","title":"Jobs completed per second","gridPos":{"h":8,"w":12,"x":12,"y":0},"targets":[{"expr":"sum by (result) (rate(jobs_completed_total[1m]))"}]},
-    {"type":"timeseries","title":"Jobs claimed per second","gridPos":{"h":8,"w":12,"x":0,"y":8},"targets":[{"expr":"sum by (job_type) (rate(jobs_claimed_total[1m]))"}]},
-    {"type":"timeseries","title":"P95 execution time","gridPos":{"h":8,"w":12,"x":12,"y":8},"targets":[{"expr":"histogram_quantile(0.95, sum by (le) (rate(job_execution_seconds_bucket[1m])))"}]},
-    {"type":"stat","title":"Dead jobs","gridPos":{"h":6,"w":6,"x":0,"y":16},"targets":[{"expr":"jobs_queue_depth{status=\"DEAD\"}"}]},
-    {"type":"stat","title":"Lease recoveries","gridPos":{"h":6,"w":6,"x":6,"y":16},"targets":[{"expr":"sum(jobs_lease_recovered_total)"}]},
-    {"type":"timeseries","title":"Oldest pending job age","gridPos":{"h":6,"w":12,"x":12,"y":16},"targets":[{"expr":"jobs_oldest_pending_age_seconds"}]}
+    {"type":"timeseries","title":"Queue depth by status","gridPos":{"h":8,"w":12,"x":0,"y":0},"targets":[{"expr":"jobs_queue_depth{status!=\"SUCCESS\"}","legendFormat":"{{status}}"}]},
+    {"type":"timeseries","title":"Jobs completed per second","gridPos":{"h":8,"w":12,"x":12,"y":0},"targets":[{"expr":"sum by (result) (rate(jobs_completed_total[1m]))","legendFormat":"{{result}}"}]},
+    {"type":"timeseries","title":"Jobs claimed per second","gridPos":{"h":8,"w":12,"x":0,"y":8},"targets":[{"expr":"sum by (job_type) (rate(jobs_claimed_total[1m]))","legendFormat":"{{job_type}}"}]},
+    {"type":"timeseries","title":"P95 execution time","gridPos":{"h":8,"w":12,"x":12,"y":8},"targets":[{"expr":"histogram_quantile(0.95, sum by (le) (rate(job_execution_seconds_bucket[1m])))","legendFormat":"p95"}]},
+    {"type":"stat","title":"Dead jobs","gridPos":{"h":6,"w":6,"x":0,"y":16},"targets":[{"expr":"jobs_queue_depth{status=\"DEAD\"}","legendFormat":"{{status}}"}]},
+    {"type":"stat","title":"Jobs succeeded (total)","gridPos":{"h":6,"w":6,"x":6,"y":16},"targets":[{"expr":"jobs_queue_depth{status=\"SUCCESS\"}","legendFormat":"{{status}}"}]},
+    {"type":"stat","title":"Lease recoveries","gridPos":{"h":6,"w":6,"x":0,"y":22},"targets":[{"expr":"sum(jobs_lease_recovered_total)","legendFormat":"recoveries"}]},
+    {"type":"timeseries","title":"Oldest pending job age","gridPos":{"h":6,"w":12,"x":12,"y":16},"targets":[{"expr":"jobs_oldest_pending_age_seconds","legendFormat":"age"}]}
   ]
 }
