@@ -108,7 +108,9 @@ public class JobWorker {
       List<Long> currentJobIds = List.copyOf(inFlightJobIds);
       List<Long> lostJobIds = new ArrayList<>(currentJobIds);
       lostJobIds.removeAll(jobRepository.runningJobIds(workerId, currentJobIds));
-      log.warn("Worker {} lost leases for jobs {}", workerId, lostJobIds);
+      if (!lostJobIds.isEmpty()) {
+        log.warn("Worker {} lost leases for jobs {}", workerId, lostJobIds);
+      }
     }
   }
 
@@ -155,7 +157,7 @@ public class JobWorker {
         .tag("job_type", job.jobType())
         .tag("result", result)
         .description("Job handler execution time")
-        .publishPercentiles()
+        .publishPercentileHistogram()
         .register(meterRegistry));
   }
 

@@ -1,6 +1,8 @@
 services:
   mysql:
     image: mysql:8.4
+    command: --innodb-buffer-pool-size=256M
+    mem_limit: 768m
     environment:
       MYSQL_DATABASE: ${MYSQL_DATABASE:-jobs}
       MYSQL_USER: ${MYSQL_USER:-jobs}
@@ -16,6 +18,8 @@ services:
       DB_PASSWORD: ${MYSQL_PASSWORD:-jobs}
       API_ENABLED: "true"
       WORKER_ENABLED: "false"
+      JAVA_TOOL_OPTIONS: "-Duser.timezone=UTC -XX:MaxRAMPercentage=65"
+    mem_limit: 384m
     ports: ["8080:8080"]
     depends_on: { mysql: { condition: service_healthy } }
   worker:
@@ -27,15 +31,19 @@ services:
       API_ENABLED: "false"
       WORKER_ENABLED: "true"
       WORKER_ID: worker-$${HOSTNAME}
+      JAVA_TOOL_OPTIONS: "-Duser.timezone=UTC -XX:MaxRAMPercentage=65"
+    mem_limit: 384m
     depends_on: { mysql: { condition: service_healthy } }
   prometheus:
     image: prom/prometheus:v3.5.0
+    mem_limit: 256m
     ports: ["9090:9090"]
     volumes:
       - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
     depends_on: [api, worker]
   grafana:
     image: grafana/grafana:12.1.1
+    mem_limit: 256m
     ports: ["3000:3000"]
     volumes:
       - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro

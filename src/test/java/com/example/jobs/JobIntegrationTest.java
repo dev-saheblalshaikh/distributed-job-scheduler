@@ -331,6 +331,7 @@ class JobIntegrationTest {
       recoveryThread.interrupt();
       recoveryThread.join();
       executor.shutdownNow();
+      assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS));
     }
   }
 
