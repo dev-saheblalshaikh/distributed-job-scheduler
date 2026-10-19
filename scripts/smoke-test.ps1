@@ -1,0 +1,99 @@
+param(
+  [string]$ApiUrl = "http://localhost:8080",
+  [string]$PrometheusUrl = "http://localhost:9090",
+  [string]$GrafanaUrl = "http://localhost:3000",
+  [string]$GrafanaUser = "admin",
+  [string]$GrafanaPassword = "admin",
+  [switch]$IncludeCrashTest
+)
+
+$ErrorActionPreference = "Stop"
+$results = @()
+
+function Add-Result([string]$Name, [bool]$Passed, [string]$Detail) {
+  $script:results += [pscustomobject]@{ Check = $Name; Result = if ($Passed) { "PASS" } else { "FAIL" }; Detail = $Detail }
+  Write-Host ("{0}: {1} - {2}" -f $Name, $script:results[-1].Result, $Detail)
+}
+
+function Get-PromValue([string]$Query) {
+  $encoded = [Uri]::EscapeDataString($Query)
+  $response = Invoke-RestMethod -Uri "$PrometheusUrl/api/v1/query?query=$encoded" -Method Get
+  if ($response.status -ne "success" -or $response.data.result.Count -eq 0) { return $null }
+  return [double]$response.data.result[0].value[1]
+}
+
+function Get-PromSum([string]$Query) {
+  $value = Get-PromValue $Query
+  if ($null -eq $value) { return 0.0 }
+  return $value
+}
+
+function Wait-Until([scriptblock]$Condition, [int]$TimeoutSeconds) {
+  $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+  do {
+    try { if (&$Condition) { return $true } } catch { }
+    Start-Sleep -Seconds 2
+  } while ((Get-Date) -lt $deadline)
+  return $false
+}
+
+function Submit-Job([string]$Type, [hashtable]$Payload, [int]$MaxAttempts = 3) {
+  $body = @{ jobType = $Type; payload = $Payload; maxAttempts = $MaxAttempts } | ConvertTo-Json -Depth 5
+  Invoke-RestMethod -Uri "$ApiUrl/api/jobs" -Method Post -ContentType "application/json" -Body $body | Out-Null
+}
+
+$up = Get-PromValue 'count(up)'
+$upAll = Get-PromValue 'count(up == 1)'
+Add-Result "up" ($up -eq 4 -and $upAll -eq 4) "expected 4 healthy series, got $up healthy of $upAll"
+
+$grafanaHeaders = @{ Authorization = "Basic " + [Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes("$GrafanaUser`:$GrafanaPassword")) }
+try {
+  $search = Invoke-RestMethod -Uri "$GrafanaUrl/api/search" -Headers $grafanaHeaders
+  $dashboardFound = @($search | Where-Object { $_.title -eq "Distributed Job Scheduler" }).Count -gt 0
+  $datasource = Invoke-RestMethod -Uri "$GrafanaUrl/api/datasources/name/Prometheus/health" -Headers $grafanaHeaders
+  Add-Result "Grafana" ($dashboardFound -and $datasource.message -match "OK|success") "dashboard found and datasource health checked"
+} catch {
+  Add-Result "Grafana" $false $_.Exception.Message
+}
+
+$successBefore = Get-PromSum 'sum(jobs_completed_total{result="success"})'
+1..100 | ForEach-Object { Submit-Job "EMAIL" @{ to = "smoke-$_.example@example.com" } }
+$s2Done = Wait-Until { (Get-PromSum 'sum(jobs_completed_total{result="success"})') - $successBefore -eq 100 } 60
+$s2Pending = Get-PromSum 'jobs_queue_depth{status="PENDING"}'
+$s2Running = Get-PromSum 'jobs_queue_depth{status="RUNNING"}'
+Add-Result "S2" ($s2Done -and $s2Pending -eq 0 -and $s2Running -eq 0) "success delta=$((Get-PromSum 'sum(jobs_completed_total{result="success"})') - $successBefore), pending=$s2Pending, running=$s2Running"
+
+$successBefore = Get-PromSum 'sum(jobs_completed_total{result="success"})'
+1..30 | ForEach-Object { Submit-Job "CHAOS" @{ sleepSeconds = 2 } }
+$maxRunning = 0
+1..15 | ForEach-Object { $maxRunning = [Math]::Max($maxRunning, (Get-PromSum 'jobs_queue_depth{status="RUNNING"}')); Start-Sleep -Seconds 2 }
+$s3Done = Wait-Until { (Get-PromSum 'sum(jobs_completed_total{result="success"})') - $successBefore -eq 30 -and (Get-PromSum 'jobs_queue_depth{status="RUNNING"}') -eq 0 } 60
+Add-Result "S3" ($maxRunning -ge 5 -and $s3Done) "max running=$maxRunning"
+
+$p95 = Get-PromValue 'histogram_quantile(0.95, sum by (le) (rate(job_execution_seconds_bucket[2m])))'
+Add-Result "P95" ($null -ne $p95 -and -not [double]::IsNaN($p95) -and $p95 -ge 1.5) "p95=$p95"
+
+$retryBefore = Get-PromSum 'sum(jobs_completed_total{result="retry"})'
+$deadBefore = Get-PromSum 'sum(jobs_completed_total{result="dead"})'
+1..5 | ForEach-Object { Submit-Job "CHAOS" @{ fail = $true } 3 }
+$s4Done = Wait-Until { (Get-PromSum 'sum(jobs_completed_total{result="retry"})') - $retryBefore -eq 10 -and (Get-PromSum 'sum(jobs_completed_total{result="dead"})') - $deadBefore -eq 5 } 90
+Add-Result "S4" $s4Done "retry delta=$((Get-PromSum 'sum(jobs_completed_total{result="retry"})') - $retryBefore), dead delta=$((Get-PromSum 'sum(jobs_completed_total{result="dead"})') - $deadBefore)"
+
+$retryBefore = Get-PromSum 'sum(jobs_completed_total{result="retry"})'
+$deadBefore = Get-PromSum 'sum(jobs_completed_total{result="dead"})'
+1..3 | ForEach-Object { Submit-Job "NOPE" @{} }
+$s5Done = Wait-Until { (Get-PromSum 'sum(jobs_completed_total{result="dead"})') - $deadBefore -eq 3 } 30
+Add-Result "S5" ($s5Done -and (Get-PromSum 'sum(jobs_completed_total{result="retry"})') - $retryBefore -eq 0) "unknown jobs are dead without retry"
+
+$oldest = Get-PromValue 'jobs_oldest_pending_age_seconds'
+$recoveries = Get-PromSum 'sum(jobs_lease_recovered_total)'
+Add-Result "queue gauges" ($null -ne $oldest -and $null -ne $recoveries) "oldest=$oldest recoveries=$recoveries"
+
+if ($IncludeCrashTest) {
+  Add-Result "S6" $false "crash test requires selecting and killing a worker container; run with Docker access and MySQL credentials"
+}
+
+Write-Host "`nSummary"
+$results | Format-Table -AutoSize
+if (@($results | Where-Object Result -eq "FAIL").Count -gt 0) { exit 1 }
+exit 0

@@ -41,3 +41,13 @@ histogram_quantile(0.95, sum by (le) (rate(job_execution_seconds_bucket[5m])))
 ```
 
 Scale workers with `docker compose up --build --scale worker=3 -d`. Worker containers do not publish host ports; Prometheus discovers their internal port through Docker DNS.
+
+## Smoke test
+
+With the Compose stack already running, execute the Windows PowerShell smoke test:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\smoke-test.ps1
+```
+
+Use `-IncludeCrashTest` to include the optional crash-recovery scenario.
