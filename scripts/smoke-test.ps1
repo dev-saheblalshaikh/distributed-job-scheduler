@@ -39,7 +39,31 @@ function Wait-Until([scriptblock]$Condition, [int]$TimeoutSeconds) {
 
 function Submit-Job([string]$Type, [hashtable]$Payload, [int]$MaxAttempts = 3) {
   $body = @{ jobType = $Type; payload = $Payload; maxAttempts = $MaxAttempts } | ConvertTo-Json -Depth 5
-  Invoke-RestMethod -Uri "$ApiUrl/api/jobs" -Method Post -ContentType "application/json" -Body $body | Out-Null
+  $null = Invoke-RestMethod -Uri "$ApiUrl/api/jobs" -Method Post -ContentType "application/json" -Body $body
+}
+
+function Submit-JobAndGetResponse([string]$Type, [hashtable]$Payload, [int]$MaxAttempts = 3) {
+  $body = @{ jobType = $Type; payload = $Payload; maxAttempts = $MaxAttempts } | ConvertTo-Json -Depth 5
+  return Invoke-RestMethod -Uri "$ApiUrl/api/jobs" -Method Post -ContentType "application/json" -Body $body
+}
+
+function Get-DbLockedBy([long]$JobId) {
+  $password = if ($env:MYSQL_ROOT_PASSWORD) { $env:MYSQL_ROOT_PASSWORD } else { "root" }
+  $query = "select coalesce(locked_by,'') from jobs where id=$JobId"
+  return (docker compose exec -T mysql mysql "-uroot" "-p$password" jobs -N -s -e $query).Trim()
+}
+
+function Get-WorkerContainerForId([string]$LockedBy) {
+  foreach ($containerId in @(docker compose ps -q worker)) {
+    if (-not $containerId) { continue }
+    $hostname = (docker inspect -f "{{.Config.Hostname}}" $containerId).Trim()
+    if ("worker-$hostname" -eq $LockedBy) { return $containerId }
+  }
+  return $null
+}
+
+function Get-Job([long]$JobId) {
+  return Invoke-RestMethod -Uri "$ApiUrl/api/jobs/$JobId" -Method Get
 }
 
 $up = Get-PromValue 'count(up)'
@@ -50,7 +74,8 @@ $grafanaHeaders = @{ Authorization = "Basic " + [Convert]::ToBase64String([Text.
 try {
   $search = Invoke-RestMethod -Uri "$GrafanaUrl/api/search" -Headers $grafanaHeaders
   $dashboardFound = @($search | Where-Object { $_.title -eq "Distributed Job Scheduler" }).Count -gt 0
-  $datasource = Invoke-RestMethod -Uri "$GrafanaUrl/api/datasources/name/Prometheus/health" -Headers $grafanaHeaders
+  $datasourceInfo = Invoke-RestMethod -Uri "$GrafanaUrl/api/datasources/name/Prometheus" -Headers $grafanaHeaders
+  $datasource = Invoke-RestMethod -Uri "$GrafanaUrl/api/datasources/uid/$($datasourceInfo.uid)/health" -Headers $grafanaHeaders
   Add-Result "Grafana" ($dashboardFound -and $datasource.message -match "OK|success") "dashboard found and datasource health checked"
 } catch {
   Add-Result "Grafana" $false $_.Exception.Message
@@ -58,17 +83,29 @@ try {
 
 $successBefore = Get-PromSum 'sum(jobs_completed_total{result="success"})'
 1..100 | ForEach-Object { Submit-Job "EMAIL" @{ to = "smoke-$_.example@example.com" } }
-$s2Done = Wait-Until { (Get-PromSum 'sum(jobs_completed_total{result="success"})') - $successBefore -eq 100 } 60
+$s2Pending = 0
+$s2Running = 0
+$s2Done = Wait-Until {
+  $s2Pending = Get-PromSum 'jobs_queue_depth{status="PENDING"}'
+  $s2Running = Get-PromSum 'jobs_queue_depth{status="RUNNING"}'
+  (Get-PromSum 'sum(jobs_completed_total{result="success"})') - $successBefore -eq 100 -and $s2Pending -eq 0 -and $s2Running -eq 0
+} 60
 $s2Pending = Get-PromSum 'jobs_queue_depth{status="PENDING"}'
 $s2Running = Get-PromSum 'jobs_queue_depth{status="RUNNING"}'
 Add-Result "S2" ($s2Done -and $s2Pending -eq 0 -and $s2Running -eq 0) "success delta=$((Get-PromSum 'sum(jobs_completed_total{result="success"})') - $successBefore), pending=$s2Pending, running=$s2Running"
 
 $successBefore = Get-PromSum 'sum(jobs_completed_total{result="success"})'
-1..30 | ForEach-Object { Submit-Job "CHAOS" @{ sleepSeconds = 2 } }
+# Fifteen-second jobs keep RUNNING visible across the five-second gauge refresh and scrape lag.
+1..30 | ForEach-Object { Submit-Job "CHAOS" @{ sleepSeconds = 15 } }
 $maxRunning = 0
-1..15 | ForEach-Object { $maxRunning = [Math]::Max($maxRunning, (Get-PromSum 'jobs_queue_depth{status="RUNNING"}')); Start-Sleep -Seconds 2 }
-$s3Done = Wait-Until { (Get-PromSum 'sum(jobs_completed_total{result="success"})') - $successBefore -eq 30 -and (Get-PromSum 'jobs_queue_depth{status="RUNNING"}') -eq 0 } 60
-Add-Result "S3" ($maxRunning -ge 5 -and $s3Done) "max running=$maxRunning"
+for ($sample = 0; $sample -lt 20 -and $maxRunning -lt 10; $sample++) {
+  $maxRunning = [Math]::Max($maxRunning, (Get-PromSum 'jobs_queue_depth{status="RUNNING"}'))
+  if ($maxRunning -lt 10) {
+    Start-Sleep -Seconds 2
+  }
+}
+$s3Done = Wait-Until { (Get-PromSum 'sum(jobs_completed_total{result="success"})') - $successBefore -eq 30 -and (Get-PromSum 'jobs_queue_depth{status="RUNNING"}') -eq 0 } 120
+Add-Result "S3" ($maxRunning -ge 10 -and $s3Done) "max running=$maxRunning"
 
 $p95 = Get-PromValue 'histogram_quantile(0.95, sum by (le) (rate(job_execution_seconds_bucket[2m])))'
 Add-Result "P95" ($null -ne $p95 -and -not [double]::IsNaN($p95) -and $p95 -ge 1.5) "p95=$p95"
@@ -90,7 +127,28 @@ $recoveries = Get-PromSum 'sum(jobs_lease_recovered_total)'
 Add-Result "queue gauges" ($null -ne $oldest -and $null -ne $recoveries) "oldest=$oldest recoveries=$recoveries"
 
 if ($IncludeCrashTest) {
-  Add-Result "S6" $false "crash test requires selecting and killing a worker container; run with Docker access and MySQL credentials"
+  $recoveryBefore = Get-PromSum 'sum(jobs_lease_recovered_total)'
+  $crashJob = Submit-JobAndGetResponse "CHAOS" @{ sleepSeconds = 20 } 3
+  $crashJobId = [long]$crashJob.id
+  $containerId = $null
+  $lockDeadline = (Get-Date).AddSeconds(30)
+  do {
+    Start-Sleep -Seconds 2
+    $lockedBy = Get-DbLockedBy $crashJobId
+    $containerId = Get-WorkerContainerForId $lockedBy
+  } while (-not $containerId -and (Get-Date) -lt $lockDeadline)
+  if ($containerId) {
+    docker kill $containerId | Out-Null
+    $s6Done = Wait-Until {
+      $currentJob = Get-Job $crashJobId
+      $recoveryDelta = (Get-PromSum 'sum(jobs_lease_recovered_total)') - $recoveryBefore
+      $recoveryDelta -ge 1 -and $currentJob.status -eq "SUCCESS" -and $currentJob.attempts -eq 2
+    } 120
+    $finalJob = Get-Job $crashJobId
+    Add-Result "S6" $s6Done "recovery delta=$((Get-PromSum 'sum(jobs_lease_recovered_total)') - $recoveryBefore), status=$($finalJob.status), attempts=$($finalJob.attempts)"
+  } else {
+    Add-Result "S6" $false "could not find a worker container holding job $crashJobId"
+  }
 }
 
 Write-Host "`nSummary"
