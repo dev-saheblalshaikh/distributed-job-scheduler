@@ -1,5 +1,7 @@
 # Distributed Job Scheduler
 
+[![CI](https://github.com/dev-saheblalshaikh/distributed-job-scheduler/actions/workflows/ci.yml/badge.svg)](https://github.com/dev-saheblalshaikh/distributed-job-scheduler/actions/workflows/ci.yml)
+
 A small, interview-friendly Spring Boot job scheduler. The API stores jobs in MySQL; workers claim due jobs and dispatch them to a handler registry. Kafka, Redis, and distributed locking beyond the database claim are intentionally deferred.
 
 Architecture: `api` (HTTP DTOs/controllers) -> `common` (job model/repository) <- `worker` (poller and pluggable handlers).
