@@ -63,8 +63,14 @@ powershell -ExecutionPolicy Bypass -File scripts\run-benchmarks.ps1 -Matrix
 
 The benchmark inserts jobs directly into MySQL, then measures the processing window from the first `locked_at` to the last `updated_at`, jobs per second, InnoDB row-lock deltas, and one Docker CPU/memory sample. It also verifies that every job succeeds or is dead and that every attempt count is exactly one. `sleepMillis=50` simulates I/O-bound work because the handler spends time waiting rather than consuming CPU.
 
-Results are relative to the laptop and Docker Desktop resource limits used for the run; they are not production capacity figures.
+Measured results are relative to the laptop with Docker Desktop. Each configuration was run once.
 
-| Jobs | Workers | Batch size | Window seconds | Jobs/sec | Lock waits | Avg CPU % | Avg memory MiB |
-|---:|---:|---:|---:|---:|---:|---:|---:|
-| | | | | | | | |
+| Workers | Batch | Window (s) | Jobs/s | Success / dead / attempts not 1 |
+|---|---|---|---|---|
+| 1 | 5 | 71 | 70.4 | 5000 / 0 / 0 |
+| 2 | 5 | 38 | 131.6 | 5000 / 0 / 0 |
+| 3 | 5 | 26 | 192.3 | 5000 / 0 / 0 |
+| 3 | 1 | 112 | 44.6 | 5000 / 0 / 0 |
+| 3 | 20 | 9 | 555.6 | 5000 / 0 / 0 |
+
+Each run processed 5000 jobs with 50 ms of simulated I/O. Timestamps are whole seconds, so the 9-second window is accurate to about 1 second. Scaling from 1 to 3 workers gave 2.7x throughput; changing the batch size from 1 to 20 gave about 12x throughput. Larger batches can strand more jobs if a worker crashes. The raw results are committed in `results/benchmarks.csv`.
