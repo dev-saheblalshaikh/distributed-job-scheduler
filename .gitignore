@@ -1,5 +1,7 @@
 target/
 .env
+deploy/.env
+/.env
 *.iml
 .idea/
 .vscode/

@@ -1,6 +1,8 @@
 services:
   mysql:
-    ports: []
+    # Compose appends lists from override files unless you reset or override them.
+    ports: !reset []
+    restart: unless-stopped
     volumes:
       - mysql-data:/var/lib/mysql
     environment:
@@ -22,11 +24,13 @@ services:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
 
   prometheus:
-    ports:
+    restart: unless-stopped
+    ports: !override
       - "127.0.0.1:9090:9090"
 
   grafana:
-    ports:
+    restart: unless-stopped
+    ports: !override
       - "127.0.0.1:3000:3000"
     environment:
       GF_SECURITY_ADMIN_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD}

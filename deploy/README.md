@@ -10,7 +10,8 @@ Create a `t3.medium` EC2 instance with 4 GB RAM and Ubuntu. In its security
 group, allow:
 
 - SSH (22) only from your own public IP address.
-- TCP 8080 from the internet only if the API must be publicly reachable.
+- TCP 8080 only from your own public IP address if the API must be reachable.
+  The API has no authentication, so do not allow it from anywhere else.
 
 Do not expose ports 3000, 9090, or 3306. Grafana and Prometheus are bound to
 localhost on the instance and are accessed through an SSH tunnel.
@@ -59,8 +60,17 @@ curl http://localhost:8080/actuator/health
 ```
 
 The API is available at `http://INSTANCE_PUBLIC_IP:8080` only when port 8080
-was intentionally allowed in the security group. MySQL has no host port, and
+was intentionally allowed only from your IP in the security group. This stack
+is a demo and is not a production security boundary. MySQL has no host port, and
 the named `mysql-data` volume preserves its data across container recreation.
+
+If the first start used the wrong `.env`, MySQL keeps the original credentials
+in its data volume. Recreate the volume and start again:
+
+```bash
+docker compose --env-file deploy/.env -f docker-compose.yml -f deploy/docker-compose.prod.yml down -v
+docker compose --env-file deploy/.env -f docker-compose.yml -f deploy/docker-compose.prod.yml up -d --build --scale worker=2
+```
 
 ## 5. Access Grafana through an SSH tunnel
 
