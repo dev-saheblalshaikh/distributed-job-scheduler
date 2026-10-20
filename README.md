@@ -51,3 +51,20 @@ powershell -ExecutionPolicy Bypass -File scripts\smoke-test.ps1
 ```
 
 Use `-IncludeCrashTest` to include the optional crash-recovery scenario.
+
+## Performance
+
+Run the repeatable throughput benchmark matrix from Windows PowerShell after stopping the normal stack:
+
+```powershell
+docker compose down
+powershell -ExecutionPolicy Bypass -File scripts\run-benchmarks.ps1 -Matrix
+```
+
+The benchmark inserts jobs directly into MySQL, then measures the processing window from the first `locked_at` to the last `updated_at`, jobs per second, InnoDB row-lock deltas, and one Docker CPU/memory sample. It also verifies that every job succeeds or is dead and that every attempt count is exactly one. `sleepMillis=50` simulates I/O-bound work because the handler spends time waiting rather than consuming CPU.
+
+Results are relative to the laptop and Docker Desktop resource limits used for the run; they are not production capacity figures.
+
+| Jobs | Workers | Batch size | Window seconds | Jobs/sec | Lock waits | Avg CPU % | Avg memory MiB |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| | | | | | | | |
