@@ -10,6 +10,25 @@ param(
 $ErrorActionPreference = "Stop"
 $results = @()
 
+foreach ($endpoint in @(
+  @{ Name = "API"; Uri = "$ApiUrl/actuator/health" },
+  @{ Name = "Prometheus"; Uri = "$PrometheusUrl/-/ready" },
+  @{ Name = "Grafana"; Uri = "$GrafanaUrl/api/health" }
+)) {
+  try {
+    Invoke-RestMethod -Uri $endpoint.Uri -Method Get | Out-Null
+  } catch {
+    Write-Error "Stack is not running. Start it with: docker compose up --build --scale worker=3 -d"
+    exit 2
+  }
+}
+
+$targetsReady = Wait-Until { (Get-PromValue 'count(up == 1)') -eq 4 } 60
+if (-not $targetsReady) {
+  Write-Error "Stack is not running. Start it with: docker compose up --build --scale worker=3 -d"
+  exit 2
+}
+
 function Add-Result([string]$Name, [bool]$Passed, [string]$Detail) {
   $script:results += [pscustomobject]@{ Check = $Name; Result = if ($Passed) { "PASS" } else { "FAIL" }; Detail = $Detail }
   Write-Host ("{0}: {1} - {2}" -f $Name, $script:results[-1].Result, $Detail)
