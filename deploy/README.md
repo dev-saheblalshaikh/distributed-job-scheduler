@@ -61,7 +61,8 @@ curl http://localhost:8080/actuator/health
 
 The API is available at `http://INSTANCE_PUBLIC_IP:8080` only when port 8080
 was intentionally allowed only from your IP in the security group. This stack
-is a demo and is not a production security boundary. MySQL has no host port, and
+is a demo and is not a production security boundary. MySQL is published on
+`127.0.0.1:3306` only (not reachable from outside the instance), and
 the named `mysql-data` volume preserves its data across container recreation.
 
 If the first start used the wrong `.env`, MySQL keeps the original credentials

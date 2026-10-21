@@ -3,30 +3,37 @@ param(
   [string]$PrometheusUrl = "http://localhost:9090",
   [string]$GrafanaUrl = "http://localhost:3000",
   [string]$GrafanaUser = "admin",
-  [string]$GrafanaPassword = "admin",
+  [string]$GrafanaPassword = "",
+  [string[]]$ComposeFiles = @(),
   [switch]$IncludeCrashTest
 )
 
 $ErrorActionPreference = "Stop"
 $results = @()
+$GrafanaPassword = if ($GrafanaPassword) { $GrafanaPassword } elseif ($env:GF_SECURITY_ADMIN_PASSWORD) { $env:GF_SECURITY_ADMIN_PASSWORD } else { "admin" }
+$composeCommand = @("compose") + $ComposeFiles
 
-foreach ($endpoint in @(
-  @{ Name = "API"; Uri = "$ApiUrl/actuator/health" },
-  @{ Name = "Prometheus"; Uri = "$PrometheusUrl/-/ready" },
-  @{ Name = "Grafana"; Uri = "$GrafanaUrl/api/health" }
-)) {
+function Invoke-Native([string]$Description, [scriptblock]$Command) {
+  $previousErrorActionPreference = $ErrorActionPreference
   try {
-    Invoke-RestMethod -Uri $endpoint.Uri -Method Get | Out-Null
-  } catch {
-    Write-Error "Stack is not running. Start it with: docker compose up --build --scale worker=3 -d"
-    exit 2
+    $ErrorActionPreference = "Continue"
+    $output = @(& $Command 2>&1 | ForEach-Object { "$_" })
+    $exitCode = $LASTEXITCODE
+    if ($exitCode -ne 0) {
+      throw "$Description failed with exit code $exitCode.`n$($output -join [Environment]::NewLine)"
+    }
+    return $output
+  } finally {
+    $ErrorActionPreference = $previousErrorActionPreference
   }
 }
 
-$targetsReady = Wait-Until { (Get-PromValue 'count(up == 1)') -eq 4 } 60
-if (-not $targetsReady) {
-  Write-Error "Stack is not running. Start it with: docker compose up --build --scale worker=3 -d"
-  exit 2
+function Invoke-Compose([string[]]$Arguments) {
+  return Invoke-Native "docker $($composeCommand -join ' ') $($Arguments -join ' ')" { & docker @composeCommand @Arguments }
+}
+
+function Invoke-Docker([string[]]$Arguments) {
+  return Invoke-Native "docker $($Arguments -join ' ')" { & docker @Arguments }
 }
 
 function Add-Result([string]$Name, [bool]$Passed, [string]$Detail) {
@@ -56,6 +63,25 @@ function Wait-Until([scriptblock]$Condition, [int]$TimeoutSeconds) {
   return $false
 }
 
+foreach ($endpoint in @(
+  @{ Name = "API"; Uri = "$ApiUrl/actuator/health" },
+  @{ Name = "Prometheus"; Uri = "$PrometheusUrl/-/ready" },
+  @{ Name = "Grafana"; Uri = "$GrafanaUrl/api/health" }
+)) {
+  try {
+    Invoke-RestMethod -Uri $endpoint.Uri -Method Get | Out-Null
+  } catch {
+    Write-Error "Stack is not running. Start it with: docker compose up --build --scale worker=3 -d"
+    exit 2
+  }
+}
+
+$targetsReady = Wait-Until { (Get-PromValue 'count(up == 1)') -eq 4 } 60
+if (-not $targetsReady) {
+  Write-Error "Stack is not running. Start it with: docker compose up --build --scale worker=3 -d"
+  exit 2
+}
+
 function Submit-Job([string]$Type, [hashtable]$Payload, [int]$MaxAttempts = 3) {
   $body = @{ jobType = $Type; payload = $Payload; maxAttempts = $MaxAttempts } | ConvertTo-Json -Depth 5
   $null = Invoke-RestMethod -Uri "$ApiUrl/api/jobs" -Method Post -ContentType "application/json" -Body $body
@@ -69,13 +95,14 @@ function Submit-JobAndGetResponse([string]$Type, [hashtable]$Payload, [int]$MaxA
 function Get-DbLockedBy([long]$JobId) {
   $password = if ($env:MYSQL_ROOT_PASSWORD) { $env:MYSQL_ROOT_PASSWORD } else { "root" }
   $query = "select coalesce(locked_by,'') from jobs where id=$JobId"
-  return (docker compose exec -T mysql mysql "-uroot" "-p$password" jobs -N -s -e $query).Trim()
+  $output = Invoke-Compose @("exec", "-T", "-e", "MYSQL_PWD=$password", "mysql", "mysql", "-uroot", "jobs", "-N", "-s", "-e", $query)
+  return ($output -join [Environment]::NewLine).Trim()
 }
 
 function Get-WorkerContainerForId([string]$LockedBy) {
-  foreach ($containerId in @(docker compose ps -q worker)) {
+  foreach ($containerId in @(Invoke-Compose @("ps", "-q", "worker"))) {
     if (-not $containerId) { continue }
-    $hostname = (docker inspect -f "{{.Config.Hostname}}" $containerId).Trim()
+    $hostname = ((Invoke-Docker @("inspect", "-f", "{{.Config.Hostname}}", $containerId)) -join [Environment]::NewLine).Trim()
     if ("worker-$hostname" -eq $LockedBy) { return $containerId }
   }
   return $null
@@ -157,7 +184,7 @@ if ($IncludeCrashTest) {
     $containerId = Get-WorkerContainerForId $lockedBy
   } while (-not $containerId -and (Get-Date) -lt $lockDeadline)
   if ($containerId) {
-    docker kill $containerId | Out-Null
+    Invoke-Docker @("kill", $containerId) | Out-Null
     $s6Done = Wait-Until {
       $currentJob = Get-Job $crashJobId
       $recoveryDelta = (Get-PromSum 'sum(jobs_lease_recovered_total)') - $recoveryBefore
