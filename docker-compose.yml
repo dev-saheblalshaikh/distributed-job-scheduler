@@ -8,7 +8,7 @@ services:
       MYSQL_USER: ${MYSQL_USER:-jobs}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:-jobs}
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
-    ports: ["3306:3306"]
+    ports: ["127.0.0.1:3306:3306"]
     healthcheck: { test: ["CMD", "mysqladmin", "ping", "-h", "localhost"], interval: 5s, timeout: 5s, retries: 20 }
   api:
     build: .
@@ -38,14 +38,14 @@ services:
   prometheus:
     image: prom/prometheus:v3.5.0
     mem_limit: 256m
-    ports: ["9090:9090"]
+    ports: ["127.0.0.1:9090:9090"]
     volumes:
       - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
     depends_on: [api, worker]
   grafana:
     image: grafana/grafana:12.1.1
     mem_limit: 256m
-    ports: ["3000:3000"]
+    ports: ["127.0.0.1:3000:3000"]
     volumes:
       - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
       - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
