@@ -10,11 +10,11 @@ Create a `t3.medium` EC2 instance with Ubuntu 24.04. In its security group,
 allow:
 
 - SSH (22) only from your own public IP address.
-- TCP 8080 only from your own public IP address if the API must be reachable.
-  The API has no authentication, so do not allow it from anywhere else.
+- HTTP (80) from anywhere (`0.0.0.0/0`).
 
-Do not expose ports 3000, 9090, or 3306. Grafana and Prometheus are bound to
-localhost on the instance and are accessed through an SSH tunnel.
+Keep TCP 8080 closed in the security group. Do not expose ports 3000, 9090, or
+3306. Grafana and Prometheus are bound to localhost on the instance and are
+accessed through an SSH tunnel.
 
 ## 2. Install Docker
 
@@ -59,11 +59,27 @@ docker compose --env-file deploy/.env -f docker-compose.yml -f deploy/docker-com
 curl http://localhost:8080/actuator/health
 ```
 
-The API is available at `http://INSTANCE_PUBLIC_IP:8080` only when port 8080
-was intentionally allowed only from your IP in the security group. This stack
-is a demo and is not a production security boundary. MySQL is published on
+The API is available through the public proxy at `http://INSTANCE_PUBLIC_IP`.
+Port 8080 is published only on the VM loopback interface, so it remains closed
+to the internet. This stack is a demo and is not a production security
+boundary. MySQL is published on
 `127.0.0.1:3306` only (not reachable from outside the instance), and
 the named `mysql-data` volume preserves its data across container recreation.
+
+## Verify the public surface
+
+Run these checks from a machine outside the VM. The expected result is shown
+in each comment:
+
+```bash
+curl -i http://VM_IP/                         # 200 (the page)
+curl -i http://VM_IP/demo/state               # 200 JSON
+curl -i http://VM_IP/api/jobs                  # 404
+curl -i http://VM_IP/actuator/prometheus       # 404
+curl -i http://VM_IP:8080/                     # connection refused / timeout
+```
+
+The page is served over plain HTTP; HTTPS needs a domain.
 
 If the first start used the wrong `.env`, MySQL keeps the original credentials
 in its data volume. Recreate the volume and start again:

@@ -13,8 +13,19 @@ services:
       DB_PASSWORD: ${MYSQL_PASSWORD}
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
       DEMO_ENABLED: "true"
+      DEMO_TRUST_PROXY_HEADER: "true"
+    ports: !override ["127.0.0.1:8080:8080"]
+
+  proxy:
+    image: caddy:2
     ports:
-      - "8080:8080"
+      - "80:80"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+    mem_limit: 64m
+    restart: unless-stopped
+    depends_on:
+      - api
 
   worker:
     restart: unless-stopped

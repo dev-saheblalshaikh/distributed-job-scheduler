@@ -1,0 +1,22 @@
+:80 {
+  # Caddy's default reverse_proxy behaviour does not trust a client-supplied
+  # X-Forwarded-For header; without trusted_proxies, it overwrites it with the real client address.
+  header {
+    X-Content-Type-Options nosniff
+    X-Frame-Options DENY
+    Referrer-Policy no-referrer
+    Content-Security-Policy "default-src 'self'; connect-src 'self'; frame-ancestors 'none'; style-src 'unsafe-inline' 'self'; script-src 'unsafe-inline' 'self'"
+  }
+
+  @public path / /index.html /demo/*
+  handle @public {
+    request_body {
+      max_size 1KB
+    }
+    reverse_proxy api:8080
+  }
+
+  handle {
+    respond 404
+  }
+}
