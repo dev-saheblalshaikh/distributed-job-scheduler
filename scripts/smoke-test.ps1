@@ -8,6 +8,8 @@ param(
   [switch]$IncludeCrashTest
 )
 
+$ComposeFiles = @($ComposeFiles | ForEach-Object { $_ -split ',' } | Where-Object { $_ })
+
 $ErrorActionPreference = "Stop"
 $results = @()
 $GrafanaPassword = if ($GrafanaPassword) { $GrafanaPassword } elseif ($env:GF_SECURITY_ADMIN_PASSWORD) { $env:GF_SECURITY_ADMIN_PASSWORD } else { "admin" }
