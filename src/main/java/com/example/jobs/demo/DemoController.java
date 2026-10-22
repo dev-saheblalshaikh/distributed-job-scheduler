@@ -45,7 +45,7 @@ public class DemoController {
     if (decision == DemoRateLimiter.Decision.CAPACITY) {
       return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).body(Map.of("message", "Demo capacity is full"));
     }
-    return ResponseEntity.ok(demoService.retry(id));
+    return ResponseEntity.ok(DemoRetryResponse.from(demoService.retry(id)));
   }
 
   @GetMapping("/state")

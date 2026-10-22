@@ -4,23 +4,17 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 
-import com.example.jobs.common.JobStatus;
-import java.util.Map;
+import com.example.jobs.AbstractMysqlIT;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.jdbc.core.JdbcTemplate;
-import org.springframework.test.context.DynamicPropertyRegistry;
-import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
-import org.testcontainers.containers.MySQLContainer;
-import org.testcontainers.junit.jupiter.Container;
-import org.testcontainers.junit.jupiter.Testcontainers;
 
-@Testcontainers
 @SpringBootTest(properties = {
     "demo.enabled=true",
     "worker.enabled=false",
@@ -28,15 +22,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
     "demo.per-client-hourly-limit=100"
 })
 @AutoConfigureMockMvc
-class DemoIntegrationTest {
-  @Container static MySQLContainer<?> mysql = new MySQLContainer<>("mysql:8.4");
-
-  @DynamicPropertySource
-  static void database(DynamicPropertyRegistry registry) {
-    registry.add("spring.datasource.url", mysql::getJdbcUrl);
-    registry.add("spring.datasource.username", mysql::getUsername);
-    registry.add("spring.datasource.password", mysql::getPassword);
-  }
+class DemoIntegrationTest extends AbstractMysqlIT {
 
   @Autowired MockMvc mockMvc;
   @Autowired JdbcTemplate jdbcTemplate;
@@ -65,17 +51,21 @@ class DemoIntegrationTest {
   @Test
   void stateOnlyContainsDemoJobsAndTruncatesErrors() throws Exception {
     jdbcTemplate.update("insert into jobs(job_type,payload,status,attempts,max_attempts,run_at,last_error,origin,created_at,updated_at) values('EMAIL','{}','SUCCESS',1,3,UTC_TIMESTAMP(),repeat('x',300),'api',UTC_TIMESTAMP(),UTC_TIMESTAMP())");
-    mockMvc.perform(post("/demo/scenarios/poison")).andExpect(status().isAccepted());
-    assertEquals(1, count("select count(*) from jobs where origin='demo'"));
-    assertEquals(0, count("select count(*) from jobs where origin='demo' and origin='api'"));
+    jdbcTemplate.update("insert into jobs(job_type,payload,status,attempts,max_attempts,run_at,last_error,origin,created_at,updated_at) values('CHAOS','{}','DEAD',3,3,UTC_TIMESTAMP(),repeat('x',300),'demo',UTC_TIMESTAMP(),UTC_TIMESTAMP())");
+    mockMvc.perform(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get("/demo/state"))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.jobs.length()", org.hamcrest.Matchers.is(1)))
+        .andExpect(jsonPath("$.jobs[0].lastError", org.hamcrest.Matchers.hasLength(200)));
   }
 
   @Test
   void cleanupKeepsFreshDemoAndAllApiRows() {
     jdbcTemplate.update("insert into jobs(job_type,payload,status,attempts,max_attempts,run_at,origin,created_at,updated_at) values('CHAOS','{}','SUCCESS',1,3,UTC_TIMESTAMP(),'demo',UTC_TIMESTAMP()-interval 2 hour,UTC_TIMESTAMP()-interval 2 hour)");
     jdbcTemplate.update("insert into jobs(job_type,payload,status,attempts,max_attempts,run_at,origin,created_at,updated_at) values('EMAIL','{}','SUCCESS',1,3,UTC_TIMESTAMP(),'api',UTC_TIMESTAMP()-interval 2 hour,UTC_TIMESTAMP()-interval 2 hour)");
+    jdbcTemplate.update("insert into jobs(job_type,payload,status,attempts,max_attempts,run_at,origin,created_at,updated_at) values('CHAOS','{}','SUCCESS',1,3,UTC_TIMESTAMP(),'demo',UTC_TIMESTAMP(),UTC_TIMESTAMP())");
     assertTrue(new DemoRepository(jdbcTemplate, null).cleanup() > 0);
     assertEquals(1, count("select count(*) from jobs where origin='api'"));
+    assertEquals(1, count("select count(*) from jobs where origin='demo'"));
   }
 
   private int count(String sql) {

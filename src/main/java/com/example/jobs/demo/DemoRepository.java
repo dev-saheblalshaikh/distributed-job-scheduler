@@ -24,7 +24,7 @@ public class DemoRepository {
 
   public List<Map<String, Object>> stateRows() {
     return jdbcTemplate.queryForList(
-        "select id,job_type,status,attempts,max_attempts,left(last_error,200) as last_error,locked_by,created_at,updated_at from jobs where origin='demo' order by id desc limit 30");
+        "select id,job_type as scenario,job_type,status,attempts,max_attempts,left(last_error,200) as lastError,locked_by as lockedBy,created_at as createdAt,updated_at as updatedAt from jobs where origin='demo' order by id desc limit 30");
   }
 
   public Map<String, Object> counts() {

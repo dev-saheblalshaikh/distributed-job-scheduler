@@ -6,7 +6,6 @@ import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayDeque;
 import java.util.concurrent.ConcurrentHashMap;
-import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 
 @Component
@@ -61,6 +60,14 @@ public class DemoRateLimiter {
   }
 
   public long retryAfter(HttpServletRequest request) {
+    ArrayDeque<Instant> history = calls.get(clientId(request));
+    if (history != null) {
+      synchronized (history) {
+        if (history.size() >= properties.getPerClientHourlyLimit()) {
+          return 3600;
+        }
+      }
+    }
     return properties.getPerClientBurstSeconds();
   }
 
