@@ -2,6 +2,7 @@ package com.example.jobs.demo;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -49,6 +50,34 @@ class DemoIntegrationTest extends AbstractMysqlIT {
   }
 
   @Test
+  void stateShowsScenarioNameFromPayload() throws Exception {
+    mockMvc.perform(post("/demo/scenarios/poison")).andExpect(status().isAccepted());
+
+    mockMvc.perform(get("/demo/state"))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.jobs[0].scenario", org.hamcrest.Matchers.is("poison")));
+  }
+
+  @Test
+  void retryReturnsExpectedStatusesAndShape() throws Exception {
+    long pendingDemoId = insertJob("demo", "PENDING");
+    long apiDeadId = insertJob("api", "DEAD");
+    long deadDemoId = insertJob("demo", "DEAD");
+
+    mockMvc.perform(post("/demo/jobs/" + pendingDemoId + "/retry"))
+        .andExpect(status().isConflict());
+    mockMvc.perform(post("/demo/jobs/" + apiDeadId + "/retry"))
+        .andExpect(status().isNotFound());
+    mockMvc.perform(post("/demo/jobs/" + deadDemoId + "/retry"))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.id", org.hamcrest.Matchers.is((int) deadDemoId)))
+        .andExpect(jsonPath("$.status", org.hamcrest.Matchers.is("PENDING")))
+        .andExpect(jsonPath("$.attempts", org.hamcrest.Matchers.is(0)))
+        .andExpect(jsonPath("$.maxAttempts", org.hamcrest.Matchers.is(3)))
+        .andExpect(jsonPath("$.*", org.hamcrest.Matchers.hasSize(4)));
+  }
+
+  @Test
   void stateOnlyContainsDemoJobsAndTruncatesErrors() throws Exception {
     jdbcTemplate.update("insert into jobs(job_type,payload,status,attempts,max_attempts,run_at,last_error,origin,created_at,updated_at) values('EMAIL','{}','SUCCESS',1,3,UTC_TIMESTAMP(),repeat('x',300),'api',UTC_TIMESTAMP(),UTC_TIMESTAMP())");
     jdbcTemplate.update("insert into jobs(job_type,payload,status,attempts,max_attempts,run_at,last_error,origin,created_at,updated_at) values('CHAOS','{}','DEAD',3,3,UTC_TIMESTAMP(),repeat('x',300),'demo',UTC_TIMESTAMP(),UTC_TIMESTAMP())");
@@ -70,5 +99,13 @@ class DemoIntegrationTest extends AbstractMysqlIT {
 
   private int count(String sql) {
     return jdbcTemplate.queryForObject(sql, Integer.class);
+  }
+
+  private long insertJob(String origin, String status) {
+    jdbcTemplate.update(
+        "insert into jobs(job_type,payload,status,attempts,max_attempts,run_at,origin,created_at,updated_at) values('CHAOS','{}',?,3,3,UTC_TIMESTAMP(),?,UTC_TIMESTAMP(),UTC_TIMESTAMP())",
+        status,
+        origin);
+    return jdbcTemplate.queryForObject("select last_insert_id()", Long.class);
   }
 }

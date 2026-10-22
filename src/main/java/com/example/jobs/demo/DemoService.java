@@ -26,6 +26,7 @@ public class DemoService {
 
   public List<Job> createScenario(String name) {
     ObjectNode payload = objectMapper.createObjectNode();
+    payload.put("scenario", name);
     int count;
     int maxAttempts = 3;
     switch (name) {
