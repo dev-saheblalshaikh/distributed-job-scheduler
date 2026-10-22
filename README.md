@@ -22,7 +22,7 @@ It is a learning project, not a new invention. The value is in the design decisi
 
 ## Demo
 
-> **Video (about 90 seconds):**(https://github.com/user-attachments/assets/2f4da762-2c18-4832-984d-6b8636aac74b)
+>(https://github.com/user-attachments/assets/2f4da762-2c18-4832-984d-6b8636aac74b)
 A built-in demo page lets you run four fixed scenarios and watch the queue live. Each scenario maps to one idea in the design:
 
 | Scenario | What it does | What it shows |
