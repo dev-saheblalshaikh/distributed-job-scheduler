@@ -1,46 +1,467 @@
 <!doctype html>
 <html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Distributed Job Scheduler Demo</title>
-  <style>
-    :root { color-scheme: light dark; --bg:#f6f7fb; --card:#fff; --text:#172033; --muted:#647085; --line:#d9deea; --accent:#2457d6; --danger:#b42318; --ok:#087443; }
-    @media (prefers-color-scheme: dark) { :root { --bg:#111522; --card:#1a2030; --text:#eef2ff; --muted:#aeb8cc; --line:#35405a; --accent:#91b4ff; --danger:#ff9d91; --ok:#6ee7ae; } }
-    * { box-sizing:border-box; } body { margin:0; background:var(--bg); color:var(--text); font:16px/1.45 system-ui,sans-serif; }
-    main { max-width:1100px; margin:auto; padding:28px 16px 48px; } header { margin-bottom:24px; } h1 { margin:0 0 6px; font-size:clamp(1.7rem,4vw,2.4rem); } h2 { margin-top:28px; } a { color:var(--accent); }
-    .muted { color:var(--muted); } .banner { min-height:0; margin:12px 0; padding:10px 12px; border-radius:8px; background:#fff0ed; color:var(--danger); } .hidden { display:none; }
-    .controls { display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:10px; } .scenario { padding:14px; border:1px solid var(--line); border-radius:10px; background:var(--card); }
-    button { border:0; border-radius:7px; padding:9px 13px; background:var(--accent); color:#fff; font:inherit; cursor:pointer; } button:disabled { opacity:.55; cursor:not-allowed; } .scenario p { margin:8px 0 0; color:var(--muted); font-size:.92rem; }
-    .summary { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:14px 0; } .badge { display:inline-flex; gap:5px; align-items:center; padding:4px 8px; border:1px solid var(--line); border-radius:999px; font-size:.88rem; } .badge strong { font-weight:700; }
-    .table-wrap { overflow-x:auto; border:1px solid var(--line); border-radius:10px; } table { width:100%; min-width:760px; border-collapse:collapse; background:var(--card); } th,td { padding:9px 10px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; } th { white-space:nowrap; font-size:.85rem; color:var(--muted); } td { font-size:.92rem; } .status { font-weight:700; } .status-PENDING { color:#a15c00; } .status-RUNNING { color:var(--accent); } .status-SUCCESS { color:var(--ok); } .status-DEAD { color:var(--danger); } .error { max-width:260px; white-space:pre-wrap; overflow-wrap:anywhere; }
-    ul { padding-left:22px; } .retry { padding:5px 8px; font-size:.86rem; }
-  </style>
-</head>
-<body>
-<main>
-  <header><h1>Distributed Job Scheduler</h1><div class="muted">A small, observable playground for distributed job claiming, retries, and lease recovery.</div><a href="https://github.com/dev-saheblalshaikh/distributed-job-scheduler">View the project on GitHub</a></header>
-  <div id="banner" class="banner hidden" role="alert"></div>
-  <section aria-labelledby="scenarios"><h2 id="scenarios">Run a demonstration</h2><div class="controls" id="controls"></div></section>
-  <section aria-labelledby="state"><h2 id="state">Live state</h2><div id="summary" class="summary" aria-live="polite"></div><div class="table-wrap"><table><thead><tr><th>ID</th><th>Scenario</th><th>Status</th><th>Attempts</th><th>Worker</th><th>Last error</th><th>Action</th></tr></thead><tbody id="jobs"><tr><td colspan="7" class="muted">Loading…</td></tr></tbody></table></div></section>
-  <section aria-labelledby="explain"><h2 id="explain">What am I looking at?</h2><ul><li><strong>SKIP LOCKED claiming:</strong> workers take different pending rows without waiting on rows another worker already picked.</li><li><strong>Retries and backoff:</strong> a failed job waits longer between attempts, giving temporary problems time to clear.</li><li><strong>Lease recovery:</strong> a heartbeat keeps a slow job owned; if a worker disappears, its expired lease lets another worker recover it.</li></ul></section>
-</main>
-<script>
-  const scenarios = { burst: '10 quick jobs → parallel claiming across workers', flaky: 'Fails twice then succeeds → retries with backoff', poison: 'Always fails → DEAD state', slow: '20 s job → lease heartbeat' };
-  const controls = document.getElementById('controls'), banner = document.getElementById('banner'), summary = document.getElementById('summary'), jobs = document.getElementById('jobs');
-  let cooldownUntil = 0, pollTimer;
-  function showBanner(message) { banner.textContent = message; banner.classList.remove('hidden'); }
-  function clearBanner() { banner.textContent = ''; banner.classList.add('hidden'); }
-  function setDisabled(disabled) { controls.querySelectorAll('button').forEach(button => { button.disabled = disabled; }); document.querySelectorAll('.retry').forEach(button => { button.disabled = disabled; }); }
-  function startCooldown(seconds) { cooldownUntil = Date.now() + Math.max(1, Number(seconds || 1)) * 1000; setDisabled(true); const tick = () => { const left = Math.ceil((cooldownUntil - Date.now()) / 1000); if (left > 0) { showBanner('Rate limited — try again in ' + left + 's'); setTimeout(tick, 250); } else { setDisabled(false); clearBanner(); } }; tick(); }
-  async function post(path) { const response = await fetch(path, { method:'POST' }); if (response.status === 429) { startCooldown(response.headers.get('Retry-After')); throw new Error('handled'); } if (response.status === 503) { showBanner('Demo is full, try again shortly.'); throw new Error('handled'); } if (!response.ok) throw new Error('Request failed (' + response.status + ')'); }
-  function addScenario(name) { const box = document.createElement('div'); box.className = 'scenario'; const button = document.createElement('button'); button.type = 'button'; button.textContent = name; button.setAttribute('aria-label', 'Run ' + name + ' scenario'); button.addEventListener('click', async () => { clearBanner(); try { await post('/demo/scenarios/' + encodeURIComponent(name)); await refresh(); } catch (error) { if (error.message !== 'handled') showBanner('Network error — will keep polling.'); } }); const text = document.createElement('p'); text.textContent = scenarios[name]; box.append(button, text); controls.append(box); }
-  Object.keys(scenarios).forEach(addScenario);
-  function badge(label, value) { const item = document.createElement('span'); item.className = 'badge'; const name = document.createElement('span'); name.textContent = label; const count = document.createElement('strong'); count.textContent = value; item.append(name, count); summary.append(item); }
-  function renderState(data) { summary.replaceChildren(); const counts = data.counts || {}; ['PENDING','RUNNING','SUCCESS','DEAD'].forEach(status => badge(status, counts[status] || 0)); const age = document.createElement('span'); age.className = 'muted'; age.textContent = 'Oldest pending: ' + (data.oldestPendingAgeSeconds || 0) + 's'; summary.append(age); jobs.replaceChildren(); (data.jobs || []).forEach(job => { const row = document.createElement('tr'); const values = [job.id, job.scenario || '—']; values.forEach(value => { const cell = document.createElement('td'); cell.textContent = String(value); row.append(cell); }); const statusCell = document.createElement('td'); statusCell.className = 'status status-' + job.status; statusCell.textContent = job.status; row.append(statusCell); const attempts = document.createElement('td'); attempts.textContent = String(job.attempts) + '/' + String(job.maxAttempts); row.append(attempts); const worker = document.createElement('td'); const workerValue = job.lockedBy ? String(job.lockedBy) : '—'; worker.textContent = workerValue.length > 6 ? workerValue.slice(-6) : workerValue; row.append(worker); const error = document.createElement('td'); error.className = 'error'; error.textContent = job.lastError || '—'; row.append(error); const action = document.createElement('td'); if (job.status === 'DEAD') { const retry = document.createElement('button'); retry.className = 'retry'; retry.type = 'button'; retry.textContent = 'Retry'; retry.setAttribute('aria-label', 'Retry job ' + job.id); retry.addEventListener('click', async () => { try { await post('/demo/jobs/' + encodeURIComponent(job.id) + '/retry'); await refresh(); } catch (e) { if (e.message !== 'handled') showBanner('Network error — will keep polling.'); } }); action.append(retry); } else action.textContent = '—'; row.append(action); jobs.append(row); }); if (!jobs.firstChild) { const row = document.createElement('tr'), cell = document.createElement('td'); cell.colSpan = 7; cell.className = 'muted'; cell.textContent = 'No demo jobs yet.'; row.append(cell); jobs.append(row); } setDisabled(cooldownUntil > Date.now()); }
-  async function refresh() { try { const response = await fetch('/demo/state'); if (response.status === 404) { showBanner('Demo is disabled.'); return; } if (!response.ok) throw new Error('Request failed'); renderState(await response.json()); if (cooldownUntil < Date.now()) clearBanner(); } catch (error) { if (!banner.textContent || !banner.textContent.startsWith('Rate limited')) showBanner('Network error — will keep polling.'); } finally { schedulePoll(); } }
-  function schedulePoll() { clearTimeout(pollTimer); if (!document.hidden) pollTimer = setTimeout(refresh, 2000); }
-  document.addEventListener('visibilitychange', () => { if (document.hidden) clearTimeout(pollTimer); else refresh(); }); refresh();
-</script>
-</body>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Distributed Job Scheduler Demo</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #f6f7fb;
+        --card: #fff;
+        --text: #172033;
+        --muted: #647085;
+        --line: #d9deea;
+        --accent: #2457d6;
+        --danger: #b42318;
+        --ok: #087443;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #111522;
+          --card: #1a2030;
+          --text: #eef2ff;
+          --muted: #aeb8cc;
+          --line: #35405a;
+          --accent: #91b4ff;
+          --danger: #ff9d91;
+          --ok: #6ee7ae;
+        }
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font:
+          16px/1.45 system-ui,
+          sans-serif;
+      }
+
+      main {
+        max-width: 1100px;
+        margin: auto;
+        padding: 28px 16px 48px;
+      }
+
+      header {
+        margin-bottom: 24px;
+      }
+
+      h1 {
+        margin: 0 0 6px;
+        font-size: clamp(1.7rem, 4vw, 2.4rem);
+      }
+
+      h2 {
+        margin-top: 28px;
+      }
+
+      a {
+        color: var(--accent);
+      }
+
+      .muted {
+        color: var(--muted);
+      }
+
+      .banner {
+        min-height: 0;
+        margin: 12px 0;
+        padding: 10px 12px;
+        border-radius: 8px;
+        background: #fff0ed;
+        color: var(--danger);
+      }
+
+      .banner { 
+        background:#3b1d1a; 
+      }
+      
+      .hidden {
+        display: none;
+      }
+
+      .controls {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+        gap: 10px;
+      }
+
+      .scenario {
+        padding: 14px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: var(--card);
+      }
+
+      button {
+        border: 0;
+        border-radius: 7px;
+        padding: 9px 13px;
+        background: var(--accent);
+        color: #fff;
+        font: inherit;
+        cursor: pointer;
+      }
+
+      button:disabled {
+        opacity: 0.55;
+        cursor: not-allowed;
+      }
+
+      .scenario p {
+        margin: 8px 0 0;
+        color: var(--muted);
+        font-size: 0.92rem;
+      }
+
+      .summary {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: center;
+        margin: 14px 0;
+      }
+
+      .badge {
+        display: inline-flex;
+        gap: 5px;
+        align-items: center;
+        padding: 4px 8px;
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        font-size: 0.88rem;
+      }
+
+      .badge strong {
+        font-weight: 700;
+      }
+
+      .table-wrap {
+        overflow-x: auto;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+      }
+
+      table {
+        width: 100%;
+        min-width: 760px;
+        border-collapse: collapse;
+        background: var(--card);
+      }
+
+      th,
+      td {
+        padding: 9px 10px;
+        border-bottom: 1px solid var(--line);
+        text-align: left;
+        vertical-align: top;
+      }
+
+      th {
+        white-space: nowrap;
+        font-size: 0.85rem;
+        color: var(--muted);
+      }
+
+      td {
+        font-size: 0.92rem;
+      }
+
+      .status {
+        font-weight: 700;
+      }
+
+      .status-PENDING {
+        color: #a15c00;
+      }
+
+      .status-RUNNING {
+        color: var(--accent);
+      }
+
+      .status-SUCCESS {
+        color: var(--ok);
+      }
+
+      .status-DEAD {
+        color: var(--danger);
+      }
+
+      .error {
+        max-width: 260px;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+
+      ul {
+        padding-left: 22px;
+      }
+
+      .retry {
+        padding: 5px 8px;
+        font-size: 0.86rem;
+      }
+    </style>
+  </head>
+
+  <body>
+    <main>
+      <header>
+        <h1>Distributed Job Scheduler</h1>
+        <div class="muted">
+          A small, observable playground for distributed job claiming, retries,
+          and lease recovery.
+        </div>
+        <a
+          href="https://github.com/dev-saheblalshaikh/distributed-job-scheduler"
+          >View the project on GitHub</a
+        >
+      </header>
+      <div id="banner" class="banner hidden" role="alert"></div>
+      <section aria-labelledby="scenarios">
+        <h2 id="scenarios">Run a demonstration</h2>
+        <div class="controls" id="controls"></div>
+      </section>
+      <section aria-labelledby="state">
+        <h2 id="state">Live state</h2>
+        <div id="summary" class="summary" aria-live="polite"></div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Scenario</th>
+                <th>Status</th>
+                <th>Attempts</th>
+                <th>Worker</th>
+                <th>Last error</th>
+                <th>Action</th>
+              </tr>
+            </thead>
+            <tbody id="jobs">
+              <tr>
+                <td colspan="7" class="muted">Loading…</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+      <section aria-labelledby="explain">
+        <h2 id="explain">What am I looking at?</h2>
+        <ul>
+          <li>
+            <strong>SKIP LOCKED claiming:</strong> workers take different
+            pending rows without waiting on rows another worker already picked.
+          </li>
+          <li>
+            <strong>Retries and backoff:</strong> a failed job waits longer
+            between attempts, giving temporary problems time to clear.
+          </li>
+          <li>
+            <strong>Lease recovery:</strong> a heartbeat keeps a slow job owned;
+            if a worker disappears, its expired lease lets another worker
+            recover it.
+          </li>
+        </ul>
+      </section>
+    </main>
+    <script>
+      const scenarios = {
+        burst: "10 quick jobs → parallel claiming across workers",
+        flaky: "Fails twice then succeeds → retries with backoff",
+        poison: "Always fails → DEAD state",
+        slow: "20 s job → lease heartbeat",
+      };
+      const controls = document.getElementById("controls"),
+        banner = document.getElementById("banner"),
+        summary = document.getElementById("summary"),
+        jobs = document.getElementById("jobs");
+      let cooldownUntil = 0,
+        pollTimer;
+      function showBanner(message) {
+        banner.textContent = message;
+        banner.classList.remove("hidden");
+      }
+      function clearBanner() {
+        banner.textContent = "";
+        banner.classList.add("hidden");
+      }
+      function setDisabled(disabled) {
+        controls.querySelectorAll("button").forEach((button) => {
+          button.disabled = disabled;
+        });
+        document.querySelectorAll(".retry").forEach((button) => {
+          button.disabled = disabled;
+        });
+      }
+      function startCooldown(seconds) {
+        cooldownUntil = Date.now() + Math.max(1, Number(seconds || 1)) * 1000;
+        setDisabled(true);
+        const tick = () => {
+          const left = Math.ceil((cooldownUntil - Date.now()) / 1000);
+          if (left > 0) {
+            showBanner("Rate limited — try again in " + left + "s");
+            setTimeout(tick, 250);
+          } else {
+            setDisabled(false);
+            clearBanner();
+          }
+        };
+        tick();
+      }
+      async function post(path) {
+        const response = await fetch(path, { method: "POST" });
+        if (response.status === 429) {
+          startCooldown(response.headers.get("Retry-After"));
+          throw new Error("handled");
+        }
+        if (response.status === 503) {
+          showBanner("Demo is full, try again shortly.");
+          throw new Error("handled");
+        }
+        if (!response.ok)
+          throw new Error("Request failed (" + response.status + ")");
+      }
+      function addScenario(name) {
+        const box = document.createElement("div");
+        box.className = "scenario";
+        const button = document.createElement("button");
+        button.type = "button";
+        button.textContent = name;
+        button.setAttribute("aria-label", "Run " + name + " scenario");
+        button.addEventListener("click", async () => {
+          clearBanner();
+          try {
+            await post("/demo/scenarios/" + encodeURIComponent(name));
+            await refresh();
+          } catch (error) {
+            if (error.message !== "handled")
+              showBanner("Network error — will keep polling.");
+          }
+        });
+        const text = document.createElement("p");
+        text.textContent = scenarios[name];
+        box.append(button, text);
+        controls.append(box);
+      }
+      Object.keys(scenarios).forEach(addScenario);
+      function badge(label, value) {
+        const item = document.createElement("span");
+        item.className = "badge";
+        const name = document.createElement("span");
+        name.textContent = label;
+        const count = document.createElement("strong");
+        count.textContent = value;
+        item.append(name, count);
+        summary.append(item);
+      }
+      function renderState(data) {
+        summary.replaceChildren();
+        const counts = data.countsByStatus || {};
+        ["PENDING", "RUNNING", "SUCCESS", "DEAD"].forEach((status) =>
+          badge(status, counts[status] || 0),
+        );
+        const age = document.createElement("span");
+        age.className = "muted";
+        age.textContent =
+          "Oldest pending: " + (data.oldestPendingAgeSeconds || 0) + "s";
+        summary.append(age);
+        jobs.replaceChildren();
+        (data.jobs || []).forEach((job) => {
+          const row = document.createElement("tr");
+          const values = [job.id, job.scenario || "—"];
+          values.forEach((value) => {
+            const cell = document.createElement("td");
+            cell.textContent = String(value);
+            row.append(cell);
+          });
+          const statusCell = document.createElement("td");
+          statusCell.className = "status status-" + job.status;
+          statusCell.textContent = job.status;
+          row.append(statusCell);
+          const attempts = document.createElement("td");
+          attempts.textContent =
+            String(job.attempts) + "/" + String(job.maxAttempts);
+          row.append(attempts);
+          const worker = document.createElement("td");
+          const workerValue = job.lockedBy ? String(job.lockedBy) : "—";
+          worker.textContent =
+            workerValue.length > 6 ? workerValue.slice(-6) : workerValue;
+          row.append(worker);
+          const error = document.createElement("td");
+          error.className = "error";
+          error.textContent = job.lastError || "—";
+          row.append(error);
+          const action = document.createElement("td");
+          if (job.status === "DEAD") {
+            const retry = document.createElement("button");
+            retry.className = "retry";
+            retry.type = "button";
+            retry.textContent = "Retry";
+            retry.setAttribute("aria-label", "Retry job " + job.id);
+            retry.addEventListener("click", async () => {
+              try {
+                await post(
+                  "/demo/jobs/" + encodeURIComponent(job.id) + "/retry",
+                );
+                await refresh();
+              } catch (e) {
+                if (e.message !== "handled")
+                  showBanner("Network error — will keep polling.");
+              }
+            });
+            action.append(retry);
+          } else action.textContent = "—";
+          row.append(action);
+          jobs.append(row);
+        });
+        if (!jobs.firstChild) {
+          const row = document.createElement("tr"),
+            cell = document.createElement("td");
+          cell.colSpan = 7;
+          cell.className = "muted";
+          cell.textContent = "No demo jobs yet.";
+          row.append(cell);
+          jobs.append(row);
+        }
+        setDisabled(cooldownUntil > Date.now());
+      }
+      async function refresh() {
+        try {
+          const response = await fetch("/demo/state");
+          if (response.status === 404) {
+            showBanner("Demo is disabled.");
+            return;
+          }
+          if (!response.ok) throw new Error("Request failed");
+          renderState(await response.json());
+          if (cooldownUntil < Date.now()) clearBanner();
+        } catch (error) {
+          if (
+            !banner.textContent ||
+            !banner.textContent.startsWith("Rate limited")
+          )
+            showBanner("Network error — will keep polling.");
+        } finally {
+          schedulePoll();
+        }
+      }
+      function schedulePoll() {
+        clearTimeout(pollTimer);
+        if (!document.hidden) pollTimer = setTimeout(refresh, 2000);
+      }
+      document.addEventListener("visibilitychange", () => {
+        if (document.hidden) clearTimeout(pollTimer);
+        else refresh();
+      });
+      refresh();
+    </script>
+  </body>
 </html>

@@ -1,11 +1,11 @@
 package com.example.jobs;
 
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertTrue;
-
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
+
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import org.junit.jupiter.api.Test;
 
 class StaticPageTest {
@@ -26,5 +26,8 @@ class StaticPageTest {
     assertTrue(page.contains("flaky"));
     assertTrue(page.contains("poison"));
     assertTrue(page.contains("slow"));
+    for (String key : new String[] {"countsByStatus", "oldestPendingAgeSeconds", "scenario", "maxAttempts", "lastError", "lockedBy"}) {
+      assertTrue(page.contains(key), key);
+    }
   }
 }
