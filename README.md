@@ -1,3 +1,13 @@
+
+
+https://github.com/user-attachments/assets/81bfbd3e-ad9b-4879-b8fe-325d15e43038
+
+
+
+
+
+
+
 # Distributed Job Scheduler
 
 [![CI](https://github.com/dev-saheblalshaikh/distributed-job-scheduler/actions/workflows/ci.yml/badge.svg)](https://github.com/dev-saheblalshaikh/distributed-job-scheduler/actions/workflows/ci.yml)
@@ -10,7 +20,7 @@ It is a learning project, not a new invention. The value is in the design decisi
 
 ## Demo
 
-> **Video (about 90 seconds):** [VIDEO_URL](VIDEO_URL)
+> **Video (about 90 seconds):** https://github.com/user-attachments/assets/81bfbd3e-ad9b-4879-b8fe-325d15e43038
 
 A built-in demo page lets you run four fixed scenarios and watch the queue live. Each scenario maps to one idea in the design:
 
