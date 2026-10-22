@@ -40,17 +40,21 @@ The demo API is **opt-in** (`DEMO_ENABLED=true`) and safe to expose by design: o
 
 ```mermaid
 flowchart LR
-    client["Client or demo page"] -->|REST| api["API"]
-    api -->|insert job| db[("MySQL 8.4")]
-    w1["Worker 1"] -->|claim with SKIP LOCKED| db
-    w2["Worker 2"] -->|claim with SKIP LOCKED| db
-    w3["Worker N"] -->|claim with SKIP LOCKED| db
-    prom["Prometheus"] -->|scrape| api
-    prom -->|scrape| w1
-    prom -->|scrape| w2
-    prom -->|scrape| w3
-    graf["Grafana"] --> prom
+    subgraph jobs["Job path"]
+        direction LR
+        client["Client or demo page"] -->|"REST: submit job, read state"| api["API"]
+        api -->|"insert job"| db[("MySQL 8.4")]
+        w["Workers 1..N"] -->|"claim with SKIP LOCKED, update status, renew lease"| db
+    end
+    subgraph obs["Monitoring path (pull-based)"]
+        direction LR
+        graf["Grafana"] -->|"queries"| prom["Prometheus"]
+        prom -.->|"scrapes /actuator/prometheus"| api2["API"]
+        prom -.->|"scrapes /actuator/prometheus"| w2["Workers 1..N"]
+    end
 ```
+
+Solid arrows show job traffic through MySQL. Dotted arrows show metrics that Prometheus pulls; Prometheus and Grafana never touch the database. The API and the workers are the same services in both parts.
 
 Code layout: `api` (controllers, DTOs, service) -> `common` (job model and repository) <- `worker` (poller, heartbeat, recovery and pluggable handlers). Public demo code lives in `demo`.
 
