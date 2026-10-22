@@ -52,7 +52,8 @@ public class JobRepository {
         resultSet.getString("last_error"),
         resultSet.getString("idempotency_key"),
         resultSet.getTimestamp("created_at").toLocalDateTime(),
-        resultSet.getTimestamp("updated_at").toLocalDateTime());
+        resultSet.getTimestamp("updated_at").toLocalDateTime(),
+        resultSet.getString("origin"));
   }
 
   // Returning an Optional keeps a missing database row explicit for callers.
@@ -71,18 +72,23 @@ public class JobRepository {
 
   // UTC_TIMESTAMP() makes timestamps independent of the database server's local timezone.
   public Job create(String type, String payload, LocalDateTime runAt, String key, int maxAttempts) {
+    return create(type, payload, runAt, key, maxAttempts, "api");
+  }
+
+  public Job create(String type, String payload, LocalDateTime runAt, String key, int maxAttempts, String origin) {
     GeneratedKeyHolder keyHolder = new GeneratedKeyHolder();
     jdbcTemplate.update(
         connection -> {
           var statement =
               connection.prepareStatement(
-                  "insert into jobs(job_type,payload,run_at,max_attempts,idempotency_key,created_at,updated_at) values(?,?,?,?,?,UTC_TIMESTAMP(),UTC_TIMESTAMP())",
+                  "insert into jobs(job_type,payload,run_at,max_attempts,idempotency_key,origin,created_at,updated_at) values(?,?,?,?,?,?,UTC_TIMESTAMP(),UTC_TIMESTAMP())",
                   Statement.RETURN_GENERATED_KEYS);
           statement.setString(1, type);
           statement.setString(2, payload);
           statement.setObject(3, runAt);
           statement.setInt(4, maxAttempts);
           statement.setString(5, key);
+          statement.setString(6, origin);
           return statement;
         },
         keyHolder);
@@ -131,7 +137,8 @@ public class JobRepository {
                           job.lastError(),
                           job.idempotencyKey(),
                           job.createdAt(),
-                          LocalDateTime.now(java.time.ZoneOffset.UTC)))
+                          LocalDateTime.now(java.time.ZoneOffset.UTC),
+                          job.origin()))
               .toList();
         });
   }

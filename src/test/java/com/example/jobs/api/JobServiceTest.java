@@ -34,7 +34,8 @@ class JobServiceTest {
             null,
             "same",
             LocalDateTime.now(),
-            LocalDateTime.now());
+            LocalDateTime.now(),
+            "api");
     when(r.byKey("same")).thenReturn(java.util.Optional.of(j));
     var s = new JobService(r, new ObjectMapper());
     assertEquals(

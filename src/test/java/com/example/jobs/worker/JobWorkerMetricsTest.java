@@ -49,6 +49,6 @@ class JobWorkerMetricsTest {
 
   private Job job(Long id, String type) {
     LocalDateTime now = LocalDateTime.now();
-    return new Job(id, type, "{}", JobStatus.RUNNING, 1, 3, now, "test-worker", now, now, null, "key-" + id, now, now);
+    return new Job(id, type, "{}", JobStatus.RUNNING, 1, 3, now, "test-worker", now, now, null, "key-" + id, now, now, "api");
   }
 }

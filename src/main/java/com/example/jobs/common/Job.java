@@ -14,4 +14,5 @@ public record Job(
     String lastError,
     String idempotencyKey,
     LocalDateTime createdAt,
-    LocalDateTime updatedAt) {}
+    LocalDateTime updatedAt,
+    String origin) {}

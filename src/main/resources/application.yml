@@ -12,6 +12,13 @@ spring:
 management.endpoints.web.exposure.include: health,info,prometheus
 api:
   enabled: ${API_ENABLED:true}
+demo:
+  enabled: ${DEMO_ENABLED:false}
+  trust-proxy-header: ${DEMO_TRUST_PROXY_HEADER:false}
+  per-client-burst-seconds: ${DEMO_PER_CLIENT_BURST_SECONDS:3}
+  per-client-hourly-limit: ${DEMO_PER_CLIENT_HOURLY_LIMIT:30}
+  global-pending-running-cap: ${DEMO_GLOBAL_PENDING_RUNNING_CAP:60}
+  cleanup-interval-ms: ${DEMO_CLEANUP_INTERVAL_MS:300000}
 worker:
   enabled: ${WORKER_ENABLED:true}
   id: ${WORKER_ID:worker-1}

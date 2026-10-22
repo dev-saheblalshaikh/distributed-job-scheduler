@@ -12,6 +12,7 @@ services:
     environment:
       DB_PASSWORD: ${MYSQL_PASSWORD}
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      DEMO_ENABLED: "true"
     ports:
       - "8080:8080"
 
