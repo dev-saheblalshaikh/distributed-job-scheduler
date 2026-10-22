@@ -1,13 +1,13 @@
-# Ubuntu EC2 deployment
+# VM deployment
 
-This deployment uses one Ubuntu EC2 instance for the API, MySQL, Prometheus,
-Grafana, and workers. It is intended for a small demonstration environment,
-not a production AWS architecture.
+This deployment uses an Ubuntu 24.04 VM with 4 GB RAM or more, on x86_64 or
+arm64. The tested images are multi-arch. It is intended for a small demo, not
+a production security boundary.
 
-## 1. Create the instance
+## AWS EC2
 
-Create a `t3.medium` EC2 instance with 4 GB RAM and Ubuntu. In its security
-group, allow:
+Create a `t3.medium` EC2 instance with Ubuntu 24.04. In its security group,
+allow:
 
 - SSH (22) only from your own public IP address.
 - TCP 8080 only from your own public IP address if the API must be reachable.
@@ -49,7 +49,7 @@ Run the command from the repository root. Compose loads the environment file
 explicitly because it is stored under `deploy/`:
 
 ```bash
-docker compose --env-file deploy/.env -f docker-compose.yml -f deploy/docker-compose.prod.yml up -d --build --scale worker=2
+docker compose --env-file deploy/.env -f docker-compose.yml -f deploy/docker-compose.prod.yml up -d --build --scale worker=3
 ```
 
 Check the containers and API health:
@@ -70,10 +70,55 @@ in its data volume. Recreate the volume and start again:
 
 ```bash
 docker compose --env-file deploy/.env -f docker-compose.yml -f deploy/docker-compose.prod.yml down -v
-docker compose --env-file deploy/.env -f docker-compose.yml -f deploy/docker-compose.prod.yml up -d --build --scale worker=2
+docker compose --env-file deploy/.env -f docker-compose.yml -f deploy/docker-compose.prod.yml up -d --build --scale worker=3
 ```
 
-## 5. Access Grafana through an SSH tunnel
+## Oracle Cloud Always Free (Ampere A1)
+
+Create an Ampere A1 VM with shape `VM.Standard.A1.Flex`, 2 OCPU and 12 GB
+memory, using Ubuntu 24.04 aarch64. In the security list, allow SSH (22) only
+from your own IP address. Also check the VM's own firewall, such as iptables,
+because cloud security rules and the guest firewall both need to allow the
+intended traffic.
+
+Install Docker, clone the repository, create `deploy/.env`, and use the same
+Compose command above. The application images used by this project are
+multi-architecture images for x86_64 and arm64.
+
+## Run the smoke test on the VM
+
+Install PowerShell 7 from Microsoft's official Ubuntu 24.04 package
+repository. The same repository commands work on both x64 and arm64 Ubuntu:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y wget
+wget -q https://packages.microsoft.com/config/ubuntu/24.04/packages-microsoft-prod.deb
+sudo dpkg -i packages-microsoft-prod.deb
+rm packages-microsoft-prod.deb
+sudo apt-get update
+sudo apt-get install -y powershell
+```
+
+Load the deployment environment so the smoke test can read the database and
+Grafana credentials:
+
+```bash
+set -a
+source deploy/.env
+set +a
+```
+
+Run the smoke test with the production Compose files and three workers. Three
+workers are required because the smoke test expects four Prometheus targets
+(API plus three workers), and S3 requires at least ten RUNNING jobs:
+
+```bash
+pwsh scripts/smoke-test.ps1 -IncludeCrashTest -ComposeFiles \
+  "--env-file","deploy/.env","-f","docker-compose.yml","-f","deploy/docker-compose.prod.yml"
+```
+
+## Access Grafana through an SSH tunnel
 
 From your local computer, forward Grafana and Prometheus through SSH:
 
@@ -88,21 +133,31 @@ Open `http://localhost:3000` locally. Log in as `admin` with the value of
 `GF_SECURITY_ADMIN_PASSWORD` from `deploy/.env`. Prometheus is available at
 `http://localhost:9090` through the same tunnel.
 
-## 6. AWS cost controls
+## Cost and shutdown
 
 Create a billing budget and a `$10` monthly cost alert in AWS Budgets. Set an
 email notification so the account owner is warned before spending exceeds the
 intended demonstration budget. A budget alert does not automatically stop
 resources, so check the instance and related resources yourself.
 
-When the application is not needed, stop the EC2 instance to save compute
-credits:
+When the application is not needed, stop the VM to save compute credits:
 
 ```bash
 docker compose --env-file deploy/.env -f docker-compose.yml -f deploy/docker-compose.prod.yml down
 ```
 
-Then stop the instance from the EC2 console or AWS CLI. Stopping the instance
-does not delete the EBS volume, so storage charges can continue. An Elastic IP
-also costs money while it is allocated but not attached to a running
-instance; release it when it is no longer needed.
+Then stop the instance from the cloud console or CLI. On AWS, a stopped
+instance still bills for its disk and any allocated Elastic IP. Release an
+Elastic IP when it is no longer needed.
+
+## Troubleshooting
+
+On the first build, if Maven runs out of memory, add a 2 GB swap file:
+
+```bash
+sudo fallocate -l 2G /swapfile
+sudo chmod 600 /swapfile
+sudo mkswap /swapfile
+sudo swapon /swapfile
+echo '/swapfile swap swap defaults 0 0' | sudo tee -a /etc/fstab
+```
