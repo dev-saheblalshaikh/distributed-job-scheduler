@@ -8,9 +8,16 @@ import org.springframework.stereotype.Component;
 @ConditionalOnProperty(name = "demo.enabled", havingValue = "true")
 public class DemoCleanup {
   private final DemoRepository demoRepository;
+  private final DemoRateLimiter demoRateLimiter;
 
-  public DemoCleanup(DemoRepository demoRepository) { this.demoRepository = demoRepository; }
+  public DemoCleanup(DemoRepository demoRepository, DemoRateLimiter demoRateLimiter) {
+    this.demoRepository = demoRepository;
+    this.demoRateLimiter = demoRateLimiter;
+  }
 
   @Scheduled(fixedDelayString = "${demo.cleanup-interval-ms:300000}")
-  public void cleanup() { demoRepository.cleanup(); }
+  public void cleanup() {
+    demoRepository.cleanup();
+    demoRateLimiter.sweep();
+  }
 }
