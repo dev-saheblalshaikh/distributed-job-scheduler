@@ -1,23 +1,22 @@
 package com.example.jobs.demo;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.when;
-
-import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import java.lang.reflect.Field;
 import java.time.Instant;
 import java.util.ArrayDeque;
 import java.util.concurrent.ConcurrentHashMap;
-import jakarta.servlet.http.HttpServletRequest;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import org.junit.jupiter.api.Test;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 import org.springframework.mock.web.MockHttpServletRequest;
+
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 
 class DemoRateLimiterTest {
   @Test
   void burstLimitIsRejected() {
-    DemoProperties properties = properties(3, 1, 60);
+    DemoProperties properties = properties(3, 30, 60);
     DemoRateLimiter limiter = limiter(properties, 0);
     MockHttpServletRequest request = request("1.1.1.1");
     assertEquals(DemoRateLimiter.Decision.ALLOWED, limiter.check(request));
